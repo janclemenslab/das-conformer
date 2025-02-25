@@ -1,9 +1,10 @@
-name: das-conformer-env
+name: das-conformer
 channels:
   - conda-forge
 dependencies:
   - python=3.12
   - pytorch=2.5
+  - pytorch-cuda=12.4
   - torchvision
   - torchaudio
   - torchinfo

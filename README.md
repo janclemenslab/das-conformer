@@ -4,32 +4,17 @@ Prototype of the next version of DAS for segmenting audio using conformer networ
 
 ## Installation
 
-
-### 1. Clone the repo
-```shell
-git clone https://github.com/janclemenslab/das_conformer
-cd das_conformer
-```
-
-### 2. Create environment
-
 macOS (arm only):
 ```shell
-conda create -n das-conformer pytorch=2.5 torchvision torchaudio torchinfo h5py matplotlib ipykernel flammkuchen librosa rich lightning=2.5 ffmpeg=6 ipykernel pandas pysoundfile numba xarray pydantic -c conda-forge
+conda env create -f https://raw.githubusercontent.com/janclemenslab/das-conformer/refs/heads/main/envs/env_macos.yaml
 ```
 
 windows with cuda (should works for linux, too):
 ```shell
-conda create -n das-conformer pytorch=2.5 torchvision torchaudio pytorch-cuda=12.4 torchinfo h5py matplotlib ipykernel flammkuchen librosa rich lightning=2.5 ffmpeg=6 ipykernel pandas pysoundfile numba xarray pydantic -c conda-forge -c nvidia
+conda env create -f https://raw.githubusercontent.com/janclemenslab/das-conformer/refs/heads/main/envs/env_other.yaml
 ```
 
-### 3. Install additional dependencies and das-conformer
-```shell
-conda activate das-conformer
-pip install "lightning[pytorch-extra]"==2.5 nnAudio pytorch-tcn vocalpy crowsetta
-pip install -e . --no-deps --force --upgrade
-```
-
+This will create a conda environment named `das-conformer`.
 
 ## Usage
 See `docs/zebra_train.ipynb`, `docs/zebra_predict.ipynb`.
