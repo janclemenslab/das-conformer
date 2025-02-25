@@ -1,0 +1,31 @@
+[build-system]
+requires = ["flit_core >=3"]
+build-backend = "flit_core.buildapi"
+
+[tool.flit.metadata]
+dist-name = "das_conformer"
+module = "das_conformer"
+author = "Jan Clemens"
+author-email = "clemensjan@googlemail.com"
+home-page = "https://github.com/janclemenslab/das_conformer"
+classifiers = ["License :: OSI Approved :: MIT License"]
+requires-python = ">=3.10"
+# requires = ['numpy', 'scipy', 'scikit-learn', 'pyyaml', 'defopt', 'pandas', 'rich',
+#             'librosa', 'torchinfo', 'pytorch', 'torchaudio', 'torchvision', 'h5py',
+#             "lightning[extras]"]
+
+description-file = "README.md"
+
+[tool.flit.scripts]
+dasc = "das_conformer.main:cli_main"
+train = "das_conformer.app:train"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = ["tests",]
+
+[tool.black]
+line-length = 128
+
+[tool.ruff]
+line-length = 128
