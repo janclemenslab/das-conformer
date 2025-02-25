@@ -87,7 +87,7 @@ class RawNPYDirDataModule(L.LightningDataModule):
             hop_length (int, optional): Number of frames to skip between consecutive chunks. Defaults to 512.
             train_repeats (int, optional): Number of times to repeat the training data. Defaults to 1.
             nb_workers (int, optional): Number of worker processes for data loading. Defaults to 2.
-            binary (bool, optional): If True, convert labels to binary format. Defaults to False.
+            binary (bool, optional): If True, convert labels to binary format [0, 1], e.g. noise vs. syllable, ignoring syllable types. Defaults to False.
         """
         # TODO: Also acccept folder with files - make npy_dir or run inference directly
 

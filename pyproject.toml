@@ -10,9 +10,6 @@ author-email = "clemensjan@googlemail.com"
 home-page = "https://github.com/janclemenslab/das_conformer"
 classifiers = ["License :: OSI Approved :: MIT License"]
 requires-python = ">=3.10"
-# requires = ['numpy', 'scipy', 'scikit-learn', 'pyyaml', 'defopt', 'pandas', 'rich',
-#             'librosa', 'torchinfo', 'pytorch', 'torchaudio', 'torchvision', 'h5py',
-#             "lightning[extras]"]
 
 description-file = "README.md"
 
