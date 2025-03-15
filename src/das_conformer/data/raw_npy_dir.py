@@ -19,6 +19,7 @@ class SyllableGenerator(Dataset):
         specs: Sequence,
         labels: Sequence,
         binary: bool = False,
+        augs=None,
     ):
         """
         A dataset generator for syllable-level audio data.
@@ -36,6 +37,7 @@ class SyllableGenerator(Dataset):
         self.specs = specs
         self.labels = labels
         self.binary = binary
+        self.augs = augs
         self.nb_total = (len(self.labels) - self.time_steps - 1) // self.time_steps
 
     def __len__(self):
@@ -56,6 +58,11 @@ class SyllableGenerator(Dataset):
             y[:, 0] = y0[:, 0]
             y[:, 1] = 1.0 - y0[:, 0]
 
+        if self.augs is not None:
+            audio_chunk = self.augs(
+                torch.tensor(audio_chunk[:, None, :]), sample_rate=self.augs.sample_rate
+            )[:, 0, :]
+
         return (
             audio_chunk,
             self.time_steps,
@@ -75,6 +82,8 @@ class RawNPYDirDataModule(L.LightningDataModule):
         train_repeats: int = 1,
         nb_workers: int = 2,
         binary: bool = False,
+        augs=None,
+        training: bool = False,
     ):
         """
         Initialize the RawNPYDirDataModule.
@@ -93,7 +102,7 @@ class RawNPYDirDataModule(L.LightningDataModule):
 
         super().__init__()
         self.save_hyperparameters()
-
+        print("test")
         self.data_dir = data_dir
         self.batch_size = batch_size
         self.time_steps = time_steps
@@ -101,6 +110,8 @@ class RawNPYDirDataModule(L.LightningDataModule):
         self.train_repeats = train_repeats
         self.nb_workers = nb_workers
         self.binary = binary
+        self.augs = augs
+        self.training = training
         self.data = npy_dir.load(self.data_dir, memmap_dirs="all")
 
     def setup(self, stage: str):
@@ -113,12 +124,13 @@ class RawNPYDirDataModule(L.LightningDataModule):
             specs=self.data[stage]["x"],
             labels=self.data[stage]["y"],
             binary=self.binary,
+            augs=self.augs if stage == "train" else None,
         )
 
         return DataLoader(
             gen,
             batch_size=self.batch_size,
-            shuffle=stage == "train",
+            shuffle=(stage == "train") and self.training,
             num_workers=self.nb_workers,
             persistent_workers=self.nb_workers > 0,
             pin_memory=True,

@@ -25,6 +25,7 @@ dependencies:
   - pip
   - pip:
     - lightning[pytorch-extra]==2.5
+    - torch-audiomentations
     - nnAudio
     - pytorch-tcn
     - vocalpy
