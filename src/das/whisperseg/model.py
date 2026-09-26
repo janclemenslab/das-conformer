@@ -111,36 +111,6 @@ def checkpoint_payload(model, tokenizer, current_step):
     }
 
 
-def convert_aer_bundle(source, destination):
-    """Repack a converted whisperseg-aer .pt bundle as a DAS .ckpt."""
-    bundle = torch.load(source, map_location="cpu", weights_only=True, mmap=True)
-    if bundle.get("format") != "whisperseg-aer/v1":
-        raise ValueError("Expected a whisperseg-aer/v1 bundle.")
-    output = Path(destination)
-    if output.suffix != ".ckpt":
-        raise ValueError("DAS WhisperSeg checkpoints must end in .ckpt.")
-    if output.exists():
-        raise FileExistsError(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "das": {"version": 1, "backend": "whisperseg", "converted_from": "whisperseg-aer/v1", "source": bundle.get("source")},
-            WHISPERSEG_CHECKPOINT_KEY: {
-                "format": WHISPERSEG_CHECKPOINT_FORMAT,
-                "format_version": WHISPERSEG_CHECKPOINT_FORMAT_VERSION,
-                "model_class": "WhisperForConditionalGeneration",
-                "model_config": bundle["config"],
-                "generation_config": bundle["generation_config"],
-                "model_state_dict": bundle["state_dict"],
-                "tokenizer_files": bundle["tokenizer_files"],
-                "metadata": {"current_step": bundle["config"].get("current_step", 0)},
-            },
-        },
-        output,
-    )
-    return output
-
-
 def _load_checkpoint_payload(model_path, map_location="cpu"):
     checkpoint = _torch_load(model_path, map_location=map_location)
     if not isinstance(checkpoint, dict):

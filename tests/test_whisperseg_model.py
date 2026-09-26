@@ -22,7 +22,6 @@ from das.whisperseg.model import (
     WhisperSegmenterForEval,
     _make_weights_only_safe,
     _torch_load,
-    convert_aer_bundle,
     is_model_checkpoint_path,
     load_model_checkpoint,
 )
@@ -95,11 +94,11 @@ def test_eval_segmenter_streams_features_in_batches(monkeypatch):
     assert max_pending == 2
 
 
-def test_torch_load_accepts_existing_bundle_with_numpy_scalars(tmp_path: Path):
-    bundle_path = tmp_path / "model.pt"
-    torch.save({"value": np.float64(1.5), "dtype": np.dtype("float64")}, bundle_path)
+def test_torch_load_accepts_checkpoint_with_numpy_scalars(tmp_path: Path):
+    checkpoint_path = tmp_path / "model.ckpt"
+    torch.save({"value": np.float64(1.5), "dtype": np.dtype("float64")}, checkpoint_path)
 
-    loaded = _torch_load(bundle_path)
+    loaded = _torch_load(checkpoint_path)
 
     assert loaded["value"] == np.float64(1.5)
     assert loaded["dtype"] == np.dtype("float64")
@@ -126,28 +125,6 @@ def test_old_whisperseg_model_pt_bundle_is_not_checkpoint(tmp_path: Path):
 
     assert is_model_checkpoint_path(bundle_path) is False
     assert is_model_checkpoint_path(bundle_dir) is False
-
-
-def test_convert_aer_bundle_to_das_checkpoint(tmp_path: Path):
-    source = tmp_path / "converted.pt"
-    output = tmp_path / "converted.ckpt"
-    torch.save(
-        {
-            "format": "whisperseg-aer/v1",
-            "source": "upstream-revision",
-            "config": {"dtype": "float16", "current_step": 2},
-            "generation_config": {"max_length": 12},
-            "state_dict": {"weight": torch.tensor([1.0])},
-            "tokenizer_files": {"vocab.json": b"{}"},
-        },
-        source,
-    )
-
-    assert convert_aer_bundle(source, output) == output
-    assert is_model_checkpoint_path(output)
-    converted = torch.load(output, weights_only=True)
-    assert converted["das"]["backend"] == "whisperseg"
-    assert torch.equal(converted["whisperseg"]["model_state_dict"]["weight"], torch.tensor([1.0]))
 
 
 def test_load_model_checkpoint_reconstructs_embedded_model(tmp_path: Path, monkeypatch):
