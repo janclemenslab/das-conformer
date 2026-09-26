@@ -983,7 +983,7 @@ def _build_train_datamodule(
         include_labels=config.include_labels,
         num_workers=num_workers,
         persistent_workers=num_workers > 0,
-        target_samplerate=samplerate if config.target_samplerate_hz is not None else None,
+        target_samplerate=samplerate,
         audio_dataset=config.audio_dataset,
         data_samplerate_hz=config.data_samplerate_hz,
         split_seed=config.seed,
@@ -1168,6 +1168,12 @@ def _train_supervised(
 
     datamodule, samplerate, auto_evaluate = _build_train_datamodule(config)
     if verbose:
+        source_samplerates = sorted(getattr(datamodule, "source_samplerates", ()))
+        if any(rate != samplerate for rate in source_samplerates):
+            rates = ", ".join(_format_samplerate(rate) for rate in source_samplerates)
+            label = "Audio sample rate" if len(source_samplerates) == 1 else "Audio sample rates"
+            target = "median" if config.target_samplerate_hz is None else "configured"
+            print(f"{label}: {rates}; resampling on the fly to {target} {_format_samplerate(samplerate)}.")
         _log_datamodule_split_stats(datamodule)
         print("Data prepared.")
     training_started_at = _training_start_timestamp()
@@ -1728,15 +1734,13 @@ def _infer_samplerate(
     audio_dataset: str | None = None,
     data_samplerate_hz: float | None = None,
 ) -> int:
-    samplerates = set()
+    samplerates = []
     for path in iter_audio_candidate_paths(data_dir):
         try:
             info = audio_file_info(path, audio_dataset=audio_dataset, data_samplerate_hz=data_samplerate_hz)
         except Exception:
             continue
-        samplerates.add(int(info["samplerate"]))
+        samplerates.append(int(info["samplerate"]))
     if not samplerates:
         raise ValueError(f"No readable audio files found in '{data_dir}'.")
-    if len(samplerates) != 1:
-        raise ValueError("All input audio files must share the same samplerate.")
-    return int(next(iter(samplerates)))
+    return int(round(float(np.median(samplerates))))

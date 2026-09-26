@@ -1609,6 +1609,37 @@ def test_infer_samplerate_finds_nested_audio(tmp_path: Path):
     assert api._infer_samplerate(str(tmp_path)) == 16_000
 
 
+def test_train_resamples_mixed_rate_folder_to_median(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    for name, rate in (("low", 8_000), ("high-a", 16_000), ("high-b", 16_000)):
+        sf.write(tmp_path / f"{name}.wav", np.zeros(rate // 10, dtype=np.float32), rate)
+        pd.DataFrame([{"name": "song", "start_seconds": 0.02, "stop_seconds": 0.04}]).to_csv(
+            tmp_path / f"{name}_annotations.csv", index=False
+        )
+
+    config = Config(mode="train", data_dir=str(tmp_path), frontend_type="raw", num_time_steps=512,
+                    batch_size=1, validation_fraction=0, test_fraction=0, num_workers=0)
+    datamodule, samplerate, _ = api._build_train_datamodule(config)
+
+    assert samplerate == 16_000
+    assert datamodule.target_samplerate == 16_000
+    dataset = datamodule.train_dataloader().dataset
+    low_idx = dataset.audio_files.index(tmp_path / "low.wav")
+    assert dataset.source_samplerate_per_file[low_idx] == 8_000
+    assert dataset.samplerate_per_file[low_idx] == 16_000
+    assert dataset.nb_samples_in_file[low_idx] == 1_600
+    assert dataset[int(dataset.chunk_borders[low_idx])][0].shape == (512,)
+
+    monkeypatch.setattr(api, "_build_train_datamodule", lambda config: (datamodule, samplerate, False))
+
+    def stop_before_model():
+        raise RuntimeError("stop before model")
+
+    monkeypatch.setattr(api, "_training_start_timestamp", stop_before_model)
+    with pytest.raises(RuntimeError, match="stop before model"):
+        api._train_supervised(config, verbose=True, stop_event=None, emit_epoch_logs=False)
+    assert "resampling on the fly to median 16000 Hz" in capsys.readouterr().out
+
+
 def test_train_uses_target_samplerate_without_inferring_input_rates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
