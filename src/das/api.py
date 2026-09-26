@@ -12,7 +12,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 import torch
-from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint
+from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint, TQDMProgressBar
 from lightning.pytorch.loggers import CSVLogger
 from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm.auto import tqdm
@@ -44,6 +44,7 @@ from .prediction_results import (
     PredictionEvaluation,
     PredictionResultContext,
 )
+from .progress import TrainingLogProgress
 
 ConfigLike = Config | Mapping[str, object] | None
 RawAudioLike = np.ndarray | list[float] | list[np.ndarray] | tuple[np.ndarray, ...]
@@ -1114,7 +1115,9 @@ def _training_callbacks(
 ) -> list[object]:
     callbacks: list[object] = [checkpoint_callback, *(extra_callbacks or [])]
     if verbose and emit_epoch_logs:
-        callbacks.append(_EpochLogCallback())
+        callbacks.extend((_EpochLogCallback(), TrainingLogProgress()))
+    elif verbose:
+        callbacks.append(TQDMProgressBar())
     if stop_event is not None:
         callbacks.append(_StopOnEventCallback(stop_event, verbose=verbose))
     return callbacks
@@ -1127,6 +1130,7 @@ def _training_trainer(
     callbacks: list[object],
     train_loader,
     verbose: bool,
+    emit_epoch_logs: bool,
 ):
     trainer_kwargs = dict(
         max_epochs=int(config.num_epochs),
@@ -1134,7 +1138,7 @@ def _training_trainer(
         devices=_trainer_devices(config.num_devices),
         logger=CSVLogger(save_dir=str(output_dir), name="logs"),
         callbacks=callbacks,
-        enable_progress_bar=verbose,
+        enable_progress_bar=verbose and not emit_epoch_logs,
         enable_model_summary=verbose,
     )
     if config.max_num_steps_per_epoch is not None:
@@ -1235,6 +1239,7 @@ def _train_supervised(
         ),
         train_loader=train_loader,
         verbose=verbose,
+        emit_epoch_logs=emit_epoch_logs,
     )
 
     if verbose:

@@ -7,6 +7,7 @@ from lightning.pytorch.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
     ModelCheckpoint,
+    TQDMProgressBar,
 )
 from lightning.pytorch.loggers import CSVLogger
 from torch.optim import AdamW
@@ -24,6 +25,7 @@ from .datautils import (
     resolve_training_data_dir,
 )
 from ..data.audio_dir import _normalize_include_labels, _validate_include_labels
+from ..progress import TrainingLogProgress
 from .model import checkpoint_payload, load_model
 
 
@@ -421,7 +423,9 @@ def train(
         LearningRateMonitor(logging_interval="step"),
     ]
     if emit_epoch_logs:
-        callbacks.append(EpochLogCallback())
+        callbacks.extend((EpochLogCallback(), TrainingLogProgress()))
+    elif verbose:
+        callbacks.append(TQDMProgressBar())
     if stop_event is not None:
         callbacks.append(StopOnEventCallback(stop_event, verbose=emit_epoch_logs))
 
@@ -441,7 +445,7 @@ def train(
         max_epochs=num_epochs,
         logger=CSVLogger(save_dir=str(model_folder), name="logs"),
         callbacks=callbacks,
-        enable_progress_bar=verbose,
+        enable_progress_bar=verbose and not emit_epoch_logs,
         enable_model_summary=verbose,
         log_every_n_steps=1,
         # suggest_integrations=False,
