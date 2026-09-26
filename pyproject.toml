@@ -40,7 +40,7 @@ doc = [
 
 [project.urls]
 source = "https://github.com/janclemenslab/das-conformer"
-documentation = "https://janclemenslab.org/das/"
+documentation = "https://janclemenslab.org/das-alpha/"
 
 [project.scripts]
 das = "das.cli:cli_main"
