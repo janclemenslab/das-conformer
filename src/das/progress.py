@@ -23,7 +23,8 @@ class TrainingLogProgress(Callback):
         filled = min(20, int(20 * completed / total))
         bar = "#" * filled + "-" * (20 - filled)
         print(
-            f"Epoch {trainer.current_epoch + 1}/{trainer.max_epochs}: "
+            f"\rEpoch {trainer.current_epoch + 1}/{trainer.max_epochs}: "
             f"[{bar}] {completed}/{total} batches ({completed * 100 // total}%)",
+            end="\n" if completed == total else "",
             flush=True,
         )

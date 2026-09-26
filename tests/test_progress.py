@@ -6,7 +6,7 @@ from das import api
 from das.progress import TrainingLogProgress
 
 
-def test_training_log_progress_reports_batches_without_terminal_redraw(monkeypatch, capsys):
+def test_training_log_progress_redraws_one_line(monkeypatch, capsys):
     monkeypatch.setattr("das.progress.time.monotonic", lambda: 1.0)
     trainer = SimpleNamespace(current_epoch=1, max_epochs=3, num_training_batches=10)
     progress = TrainingLogProgress()
@@ -14,10 +14,10 @@ def test_training_log_progress_reports_batches_without_terminal_redraw(monkeypat
     for batch_idx in range(10):
         progress.on_train_batch_end(trainer, None, None, None, batch_idx)
 
-    assert capsys.readouterr().out.splitlines() == [
-        "Epoch 2/3: [##------------------] 1/10 batches (10%)",
-        "Epoch 2/3: [####################] 10/10 batches (100%)",
-    ]
+    assert capsys.readouterr().out == (
+        "\rEpoch 2/3: [##------------------] 1/10 batches (10%)"
+        "\rEpoch 2/3: [####################] 10/10 batches (100%)\n"
+    )
 
 
 def test_training_uses_terminal_bar_or_log_progress():

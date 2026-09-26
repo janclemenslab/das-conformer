@@ -2476,7 +2476,12 @@ class DASConformerWindow(QMainWindow):
     def _append_log(self, text: str) -> None:
         cursor = self.log_output.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.insertText(text)
+        for index, part in enumerate(text.replace("\r\n", "\n").split("\r")):
+            if index:
+                cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
+                cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                cursor.removeSelectedText()
+            cursor.insertText(part)
         self.log_output.setTextCursor(cursor)
         self.log_output.ensureCursorVisible()
 

@@ -70,6 +70,22 @@ def test_window_builds_and_switches_primary_button(qtbot):
     assert window.run_button.text() == "Start Prediction"
 
 
+def test_log_redraws_training_progress_in_place(qtbot):
+    window = gui.DASConformerWindow()
+    qtbot.addWidget(window)
+    window._append_log("Training starts.\n")
+    window._append_log("\rEpoch 1/2: [##------------------] 1/10 batches (10%)")
+    window._append_log("\rEpoch 1/2: [####----------------] 2/10 batches (20%)")
+
+    assert window.log_output.toPlainText() == "Training starts.\nEpoch 1/2: [####----------------] 2/10 batches (20%)"
+
+    window._append_log("\rEpoch 1/2: [####################] 10/10 batches (100%)")
+    window._append_log("\nEpoch 1 complete.\n")
+    assert window.log_output.toPlainText() == (
+        "Training starts.\nEpoch 1/2: [####################] 10/10 batches (100%)\nEpoch 1 complete.\n"
+    )
+
+
 def test_error_dialog_keeps_trace_scrollable(qtbot, monkeypatch: pytest.MonkeyPatch):
     window = gui.DASConformerWindow()
     qtbot.addWidget(window)
