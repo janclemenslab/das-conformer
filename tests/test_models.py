@@ -11,8 +11,6 @@ from das.models.decoders import (
     DecoderConfig,
     LSTMDecoderConfig,
     LinearDecoderConfig,
-    TimestampDecoder,
-    TimestampDecoderConfig,
     WhisperSegDecoderConfig,
     build_decoder,
     serialize_decoder_config,

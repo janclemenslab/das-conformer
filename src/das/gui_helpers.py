@@ -180,24 +180,13 @@ class PredictDataSectionState:
 class ModelSelectionState:
     model_class: Literal["das", "whisperseg"] = "das"
     frontend_type: Literal["raw", "stft", "mel", "conv", "conv_resnet", "whisperseg"] = "mel"
-    encoder_type: Literal["conformer", "tcn", "tweetynet", "whisperseg", "aves2", "perch2", "birdcode"] = "conformer"
-    decoder_type: Literal["linear", "lstm", "conv", "attention", "timestamp", "whisperseg"] = "linear"
+    encoder_type: Literal["conformer", "tcn", "tweetynet", "whisperseg"] = "conformer"
+    decoder_type: Literal["linear", "lstm", "conv", "attention", "whisperseg"] = "linear"
 
 
 @dataclass
 class EncoderSettingsState:
     freeze_encoder: bool = _DEFAULT_CONFIG.freeze_encoder
-
-
-@dataclass
-class PretrainedEncoderState:
-    model_id: str = ""
-    checkpoint: str = ""
-    sample_rate: str = ""
-    embedding_dim: str = ""
-    window_seconds: str = ""
-    hop_seconds: str = ""
-    cache_dir: str = ""
 
 
 @dataclass
@@ -278,14 +267,6 @@ class AttentionDecoderState:
     num_heads: int = 4
     num_layers: int = 2
     dropout: float = 0.1
-
-
-@dataclass
-class TimestampDecoderState:
-    num_heads: int = 4
-    num_layers: int = 2
-    dropout: float = 0.1
-    max_length: int = _DEFAULT_CONFIG.max_length
 
 
 @dataclass
@@ -379,11 +360,9 @@ class TrainGuiState:
     conformer_encoder: ConformerEncoderState = field(default_factory=ConformerEncoderState)
     tcn_encoder: TCNEncoderState = field(default_factory=TCNEncoderState)
     tweetynet_encoder: TweetynetEncoderState = field(default_factory=TweetynetEncoderState)
-    pretrained_encoder: PretrainedEncoderState = field(default_factory=PretrainedEncoderState)
     lstm_decoder: LSTMDecoderState = field(default_factory=LSTMDecoderState)
     conv_decoder: ConvDecoderState = field(default_factory=ConvDecoderState)
     attention_decoder: AttentionDecoderState = field(default_factory=AttentionDecoderState)
-    timestamp_decoder: TimestampDecoderState = field(default_factory=TimestampDecoderState)
     whisperseg_decoder: WhisperSegDecoderState = field(default_factory=WhisperSegDecoderState)
     model_hyperparameters: ModelHyperparametersState = field(default_factory=ModelHyperparametersState)
     trainer: TrainerSectionState = field(default_factory=TrainerSectionState)
@@ -480,8 +459,6 @@ def train_gui_state_to_config(state: TrainGuiState) -> Config:
         encoder_dropout = float(state.tcn_encoder.dropout)
     if decoder_type == "whisperseg":
         decoder_dropout = float(state.whisperseg_decoder.decoder_dropout)
-    elif decoder_type == "timestamp":
-        decoder_dropout = float(state.timestamp_decoder.dropout)
     else:
         decoder_dropout = float(state.attention_decoder.dropout)
     return Config(
@@ -513,13 +490,6 @@ def train_gui_state_to_config(state: TrainGuiState) -> Config:
         frequency_scale=_optional_float(state.whisperseg_frontend.frequency_scale),
         spec_time_step=_optional_float(state.whisperseg_frontend.spec_time_step),
         encoder_type=encoder_type,
-        encoder_model_id=_optional_str(state.pretrained_encoder.model_id),
-        encoder_checkpoint=_optional_str(state.pretrained_encoder.checkpoint),
-        encoder_sample_rate=_optional_int(state.pretrained_encoder.sample_rate),
-        encoder_embedding_dim=_optional_int(state.pretrained_encoder.embedding_dim),
-        encoder_window_seconds=_optional_float(state.pretrained_encoder.window_seconds),
-        encoder_hop_seconds=_optional_float(state.pretrained_encoder.hop_seconds),
-        encoder_cache_dir=_optional_str(state.pretrained_encoder.cache_dir),
         encoder_num_heads=int(state.conformer_encoder.num_heads),
         encoder_hidden_size=encoder_hidden_size,
         encoder_num_layers=encoder_num_layers,
@@ -532,16 +502,10 @@ def train_gui_state_to_config(state: TrainGuiState) -> Config:
         decoder_type=decoder_type,
         decoder_hidden_size=int(state.lstm_decoder.hidden_size),
         decoder_kernel_size=int(state.conv_decoder.kernel_size),
-        decoder_num_heads=int(
-            state.timestamp_decoder.num_heads if decoder_type == "timestamp" else state.attention_decoder.num_heads
-        ),
-        decoder_num_layers=int(
-            state.timestamp_decoder.num_layers if decoder_type == "timestamp" else state.attention_decoder.num_layers
-        ),
+        decoder_num_heads=int(state.attention_decoder.num_heads),
+        decoder_num_layers=int(state.attention_decoder.num_layers),
         decoder_dropout=decoder_dropout,
-        max_length=int(
-            state.timestamp_decoder.max_length if decoder_type == "timestamp" else state.whisperseg_decoder.max_length
-        ),
+        max_length=int(state.whisperseg_decoder.max_length),
         generation_max_length=int(state.whisperseg_decoder.generation_max_length),
         num_trials=int(state.whisperseg_decoder.num_trials),
         num_beams=int(state.whisperseg_decoder.num_beams),
@@ -661,9 +625,6 @@ def train_config_to_gui_state(config: Config) -> TrainGuiState:
         state.whisperseg_frontend.spec_time_step = _format_optional_number(frontend.get("spec_time_step"))
 
     state.model_selection.encoder_type = str(encoder["type"])
-    for name in vars(state.pretrained_encoder):
-        value = getattr(config, f"encoder_{name}")
-        setattr(state.pretrained_encoder, name, "" if value is None else str(value))
     if encoder["type"] == "conformer":
         state.conformer_encoder.num_heads = int(encoder["num_heads"])
         state.conformer_encoder.hidden_size = int(encoder["hidden_size"])
@@ -693,11 +654,6 @@ def train_config_to_gui_state(config: Config) -> TrainGuiState:
         state.attention_decoder.num_heads = int(decoder["num_heads"])
         state.attention_decoder.num_layers = int(decoder["num_layers"])
         state.attention_decoder.dropout = float(decoder["dropout"])
-    elif decoder["type"] == "timestamp":
-        state.timestamp_decoder.num_heads = int(decoder["num_heads"])
-        state.timestamp_decoder.num_layers = int(decoder["num_layers"])
-        state.timestamp_decoder.dropout = float(decoder["dropout"])
-        state.timestamp_decoder.max_length = int(decoder["max_length"])
     elif decoder["type"] == "whisperseg":
         state.whisperseg_decoder.decoder_dropout = float(decoder["dropout"])
         state.whisperseg_decoder.max_length = int(decoder["max_length"])

@@ -12,14 +12,10 @@ from .models.decoders import serialize_decoder_config
 from .models.encoders import TcnPadding, serialize_encoder_config
 from .models.frontends import PadMode, serialize_frontend_config
 
-PRETRAINED_ENCODERS = ("aves2", "perch2", "birdcode")
-
-ModeName = Literal["train", "predict", "label", "embed", "gui", "convert-legacy"]
+ModeName = Literal["train", "predict", "gui", "convert-legacy"]
 SplitName = Literal["train", "val", "test"]
 TrainerAccelerator = Literal["auto", "cpu", "cuda", "mps", "tpu"]
 SyllablePostprocessor = Literal["binary_mask", "label_aware_dense"]
-LabelItems = Literal["segments", "windows"]
-LabelEmbedding = Literal["umap", "tsne"]
 ExistingAnnotations = Literal["skip", "overwrite", "merge"]
 
 
@@ -149,8 +145,8 @@ def _bool_or_list_parser(value: bool | str | list[object] | tuple[object, ...]) 
 
 def _mode_parser(value: str) -> ModeName:
     normalized = str(value).strip()
-    if normalized not in {"train", "predict", "label", "embed", "gui", "convert-legacy"}:
-        raise ValueError(f"Expected mode to be one of train, predict, label, embed, gui, convert-legacy, got '{value}'.")
+    if normalized not in {"train", "predict", "gui", "convert-legacy"}:
+        raise ValueError(f"Expected mode to be one of train, predict, gui, convert-legacy, got '{value}'.")
     return normalized
 
 
@@ -244,7 +240,7 @@ class Config:
         "train",
         help="Command mode.",
         parser=_mode_parser,
-        choices=["train", "predict", "label", "embed", "gui", "convert-legacy"],
+        choices=["train", "predict", "gui", "convert-legacy"],
     )
     data_dir: str = _config_field(
         "",
@@ -380,20 +376,13 @@ class Config:
         parser=_bool_parser,
         bool_flag=True,
     )
-    encoder_type: Literal["conformer", "tcn", "tweetynet", "whisperseg", "aves2", "perch2", "birdcode"] = _config_field(
+    encoder_type: Literal["conformer", "tcn", "tweetynet", "whisperseg"] = _config_field(
         "conformer",
         help="Encoder type.",
         parser=str,
         flags=["--encoder"],
         choices=["conformer", "tcn", "tweetynet", "whisperseg"],
     )
-    encoder_model_id: str | None = _config_field(None, help="AVES2 model name in AVEX, or BirdCODE Hugging Face repository.", parser=_optional_string_parser)
-    encoder_checkpoint: str | None = _config_field(None, help="Encoder .pt2 file: local path, hf://owner/repository/file.pt2, or Hugging Face file link.", parser=_optional_string_parser)
-    encoder_sample_rate: int | None = _config_field(None, help="Pretrained model sample rate; defaults to the selected model's rate.", parser=_optional_int_parser)
-    encoder_embedding_dim: int | None = _config_field(None, help="Embedding dimension; override for a different AVES2 model.", parser=_optional_int_parser)
-    encoder_window_seconds: float | None = _config_field(None, help="Embedding context window: Perch2/BirdCODE 5 s, AVES2 10 s.", parser=_optional_float_parser)
-    encoder_hop_seconds: float | None = _config_field(None, help="Embedding frame spacing; defaults to the context window.", parser=_optional_float_parser)
-    encoder_cache_dir: str | None = _config_field(None, help="Reusable embedding cache directory. Required for das embed.", parser=_optional_string_parser)
     encoder_num_heads: int = _config_field(4, help="Number of conformer attention heads.", parser=int)
     encoder_hidden_size: int = _config_field(128, help="Encoder hidden size or filter count.", parser=int)
     encoder_num_layers: int = _config_field(3, help="Number of encoder layers or stacks.", parser=int)
@@ -427,7 +416,7 @@ class Config:
         parser=str,
         choices=["same", "causal"],
     )
-    decoder_type: Literal["linear", "lstm", "conv", "attention", "timestamp", "legacy_linear_upsample", "whisperseg"] = _config_field(
+    decoder_type: Literal["linear", "lstm", "conv", "attention", "legacy_linear_upsample", "whisperseg"] = _config_field(
         "linear",
         help="Decoder type.",
         parser=str,
@@ -510,7 +499,7 @@ class Config:
         parser=_bool_parser,
         bool_flag=True,
     )
-    max_length: int = _config_field(100, help="Maximum timestamp or WhisperSeg decoder token length during training.", parser=int)
+    max_length: int = _config_field(100, help="Maximum WhisperSeg decoder token length during training.", parser=int)
     generation_max_length: int = _config_field(448, help="Maximum WhisperSeg decoder token length during prediction.", parser=int)
     total_spec_columns: int = _config_field(1000, help="WhisperSeg spectrogram time columns per training clip.", parser=int)
     seed: int | None = _config_field(None, help="Optional random seed. Leave unset for nondeterministic runs.", parser=_optional_int_parser)
@@ -543,80 +532,6 @@ class Config:
         help="Merge prediction rows with existing output annotation CSV files instead of overwriting them.",
         parser=_bool_parser,
         bool_flag=True,
-    )
-    label_items: LabelItems = _config_field(
-        "segments",
-        help="Items to cluster during labeling: existing annotation segments or fixed audio windows.",
-        parser=str,
-        choices=["segments", "windows"],
-    )
-    label_window_seconds: float = _config_field(
-        0.1,
-        help="Window duration in seconds for label windows and zero-duration annotation items.",
-        parser=float,
-    )
-    label_window_stride_seconds: float = _config_field(
-        0.05,
-        help="Stride in seconds for fixed-window labeling.",
-        parser=float,
-    )
-    label_time_bins: int = _config_field(
-        64,
-        help="Number of spectrogram time bins per labeling item.",
-        parser=int,
-    )
-    label_log_scale: bool = _config_field(
-        True,
-        help="Apply log scaling to labeling spectrograms.",
-        parser=_bool_parser,
-        bool_flag=True,
-    )
-    label_amplitude_normalize: bool = _config_field(
-        True,
-        help="Normalize each labeling spectrogram item by its own amplitude scale.",
-        parser=_bool_parser,
-        bool_flag=True,
-    )
-    label_embedding: LabelEmbedding = _config_field(
-        "umap",
-        help="Embedding method for labeling.",
-        parser=str,
-        choices=["umap", "tsne"],
-    )
-    label_random_state: int | None = _config_field(
-        0,
-        help="Random seed for labeling embeddings. Leave unset for nondeterministic runs.",
-        parser=_optional_int_parser,
-    )
-    label_umap_n_neighbors: int = _config_field(
-        15,
-        help="UMAP n_neighbors for labeling.",
-        parser=int,
-    )
-    label_umap_min_dist: float = _config_field(
-        0.1,
-        help="UMAP min_dist for labeling.",
-        parser=float,
-    )
-    label_tsne_perplexity: float = _config_field(
-        30.0,
-        help="t-SNE perplexity for labeling.",
-        parser=float,
-    )
-    label_hdbscan_min_cluster_size: int = _config_field(
-        5,
-        help="HDBSCAN min_cluster_size for labeling.",
-        parser=int,
-    )
-    label_hdbscan_min_samples: int | None = _config_field(
-        None,
-        help="HDBSCAN min_samples for labeling. Leave unset to use min_cluster_size.",
-        parser=_optional_int_parser,
-    )
-    label_hdbscan_cluster_selection_epsilon: float = _config_field(
-        0.0,
-        help="HDBSCAN cluster_selection_epsilon for labeling.",
-        parser=float,
     )
     fill_gap_ms: float = _config_field(10.0, help="Merge gaps shorter than this many milliseconds.", parser=float)
     min_syllable_ms: float = _config_field(10.0, help="Drop detections shorter than this many milliseconds.", parser=float)
@@ -835,12 +750,10 @@ class Config:
         }
 
     def validate(self) -> None:
-        if self.mode in {"embed", "label"}:
-            raise ValueError(f"{self.mode} is not included in DAS 1.0a1.")
-        if self.encoder_type in PRETRAINED_ENCODERS:
-            raise ValueError("Pretrained embedding encoders are not included in DAS 1.0a1.")
-        if self.decoder_type == "timestamp":
-            raise ValueError("The timestamp decoder is not included in DAS 1.0a1.")
+        if self.encoder_type not in {"conformer", "tcn", "tweetynet", "whisperseg"}:
+            raise ValueError(f"Unsupported encoder_type: {self.encoder_type}")
+        if self.decoder_type not in {"linear", "lstm", "conv", "attention", "legacy_linear_upsample", "whisperseg"}:
+            raise ValueError(f"Unsupported decoder_type: {self.decoder_type}")
         if self.mode == "train" and self.encoder_type == "whisperseg" and not self.initial_model:
             raise ValueError("WhisperSeg training requires a DAS .ckpt initial_model.")
         if self.mode == "train" and self.encoder_type == "whisperseg" and Path(self.initial_model).suffix != ".ckpt":
@@ -883,32 +796,12 @@ class Config:
             raise ValueError("frontend_type=whisperseg is only supported with encoder_type=whisperseg.")
         if self.decoder_type == "whisperseg" and self.encoder_type != "whisperseg":
             raise ValueError("decoder_type=whisperseg is only supported with encoder_type=whisperseg.")
-        if self.decoder_type == "timestamp" and self.max_length < 5:
-            raise ValueError("decoder_type=timestamp requires max_length >= 5.")
         if self.encoder_type == "whisperseg" and self.frontend_type != "whisperseg":
             raise ValueError("encoder_type=whisperseg requires frontend_type=whisperseg.")
         if not 0 <= self.segment_threshold_low <= self.segment_threshold_high <= 1:
             raise ValueError("segment thresholds must satisfy 0 <= low <= high <= 1.")
         if not 0 <= self.event_threshold <= 1:
             raise ValueError("event_threshold must be between 0 and 1.")
-        if self.label_window_seconds <= 0:
-            raise ValueError("label_window_seconds must be positive.")
-        if self.label_window_stride_seconds <= 0:
-            raise ValueError("label_window_stride_seconds must be positive.")
-        if self.label_time_bins < 2:
-            raise ValueError("label_time_bins must be at least 2.")
-        if self.label_umap_n_neighbors < 2:
-            raise ValueError("label_umap_n_neighbors must be at least 2.")
-        if self.label_umap_min_dist < 0:
-            raise ValueError("label_umap_min_dist must be non-negative.")
-        if self.label_tsne_perplexity <= 0:
-            raise ValueError("label_tsne_perplexity must be positive.")
-        if self.label_hdbscan_min_cluster_size < 2:
-            raise ValueError("label_hdbscan_min_cluster_size must be at least 2.")
-        if self.label_hdbscan_min_samples is not None and self.label_hdbscan_min_samples < 1:
-            raise ValueError("label_hdbscan_min_samples must be positive when set.")
-        if self.label_hdbscan_cluster_selection_epsilon < 0:
-            raise ValueError("label_hdbscan_cluster_selection_epsilon must be non-negative.")
         if self.event_dist_min_ms < 0:
             raise ValueError("event_dist_min_ms must be non-negative.")
         if self.event_dist_max_ms is not None and self.event_dist_max_ms < 0:
@@ -917,7 +810,7 @@ class Config:
             raise ValueError("min_annotation_duration_ms must be non-negative.")
         if self.mode == "train" and not self.data_dir:
             raise ValueError("Provide data_dir.")
-        if self.mode in {"predict", "label", "embed"} and not self.data_dir:
+        if self.mode == "predict" and not self.data_dir:
             raise ValueError("Provide data_dir.")
         if self.mode == "train" and not self.output_dir:
             raise ValueError("Provide output_dir for training.")

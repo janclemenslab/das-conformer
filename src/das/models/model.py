@@ -1,6 +1,5 @@
 from copy import deepcopy
 from collections.abc import Mapping, Sequence
-import math
 
 import lightning as L
 import torch
@@ -9,15 +8,12 @@ from torch import nn, optim
 
 from .decoders import (
     DecoderConfig,
-    TimestampDecoder,
-    TimestampDecoderConfig,
     build_decoder,
     normalize_decoder_config,
     serialize_decoder_config,
 )
 from .encoders import EncoderConfig, build_encoder, normalize_encoder_config, serialize_encoder_config
 from .frontends import (
-    ConvResNetFrontendConfig,
     FrontendConfig,
     SincFrontendConfig,
     build_frontend,
@@ -109,22 +105,12 @@ class DASModel(L.LightningModule):
         self.frontend_config = frontend_config
         self.encoder_config = encoder_config
         self.decoder_config = decoder_config
-        self.is_timestamp_decoder = isinstance(decoder_config, TimestampDecoderConfig)
-
         self.frontend = build_frontend(frontend_config, sr=sr)
         self.encoder = build_encoder(encoder_config, input_dim=self.frontend.output_dim, sr=sr)
-        max_time_index = None
-        if self.is_timestamp_decoder:
-            if num_time_steps is None:
-                raise ValueError("Timestamp decoder requires a known num_time_steps.")
-            hop_samples = frontend_hop_length_samples(frontend_config, sr=sr)
-            max_time_index = int(math.ceil(int(num_time_steps) / hop_samples))
         self.decoder = build_decoder(
             decoder_config,
             input_dim=self.encoder.output_dim,
             num_classes=self.num_classes,
-            max_time_index=max_time_index,
-            class_types=self.class_types,
         )
 
         hop_samples = frontend_hop_length_samples(frontend_config, sr=sr)
@@ -138,7 +124,7 @@ class DASModel(L.LightningModule):
         self.criterion = nn.CrossEntropyLoss(
             weight=class_weights,
             reduction="mean",
-            ignore_index=TimestampDecoder.PAD if self.is_timestamp_decoder else -100,
+            ignore_index=-100,
         )
         self._freeze_encoder = False
 
@@ -161,73 +147,45 @@ class DASModel(L.LightningModule):
         self,
         inputs: torch.Tensor,
         input_lengths: torch.Tensor | None = None,
-        decoder_input_ids: torch.Tensor | None = None,
-        return_activity: bool = False,
     ):
         input_lengths = self._normalize_input_lengths(inputs, input_lengths)
         channel_shape = None
         if inputs.ndim == 3 and isinstance(self.frontend_config, SincFrontendConfig):
-            if self.is_timestamp_decoder:
-                raise ValueError("Multi-channel fusion is only supported by dense decoders.")
             batch_size, num_channels, num_samples = inputs.shape
             inputs = inputs.reshape(batch_size * num_channels, num_samples)
             input_lengths = input_lengths.repeat_interleave(num_channels)
             channel_shape = (batch_size, num_channels)
-        elif inputs.ndim == 3 and isinstance(self.frontend_config, ConvResNetFrontendConfig):
-            if self.is_timestamp_decoder:
-                raise ValueError("Multi-channel fusion is only supported by dense decoders.")
         features, feature_lengths = self.frontend(inputs, input_lengths)
         if channel_shape is not None:
             batch_size, num_channels = channel_shape
             features = features.reshape(batch_size, num_channels, *features.shape[1:]).amax(dim=1)
             feature_lengths = feature_lengths.reshape(batch_size, num_channels)[:, 0]
         encoded, output_lengths = self.encoder(features, feature_lengths)
-        if self.is_timestamp_decoder:
-            if decoder_input_ids is not None:
-                logits = self.decoder(encoded, decoder_input_ids, output_lengths)
-                if return_activity:
-                    return logits, self.decoder.activity_logits(encoded), output_lengths
-                return logits
-            return self.decoder.generate(encoded, output_lengths)
         logits = self.decoder(encoded)
         return logits, output_lengths
 
     def training_step(self, batch, batch_idx: int) -> torch.Tensor:
         del batch_idx
         metrics = self._shared_step(batch, include_metrics=False)
-        if self.is_timestamp_decoder:
-            self._log_dict(
-                {
-                    "train_loss": metrics["loss"],
-                    "train_token_loss": metrics["loss_xent"],
-                    "train_activity_loss": metrics["loss_activity"],
-                    "train_token_acc": metrics["acc"],
-                }
-            )
-        else:
-            self._log_dict(
-                {
-                    "train_loss": metrics["loss"],
-                    "train_crossentropy": metrics["loss_xent"],
-                    "train_syllcount": metrics["loss_nbsyll"],
-                }
-            )
+        self._log_dict(
+            {
+                "train_loss": metrics["loss"],
+                "train_crossentropy": metrics["loss_xent"],
+                "train_syllcount": metrics["loss_nbsyll"],
+            }
+        )
         return metrics["loss"]
 
     def validation_step(self, batch, batch_idx: int) -> torch.Tensor:
         del batch_idx
         metrics = self._shared_step(batch, include_metrics=False)
         values = {"val_loss": metrics["loss"], "lr": self._current_lr()}
-        if self.is_timestamp_decoder:
-            values["val_token_acc"] = metrics["acc"]
-            values["val_activity_loss"] = metrics["loss_activity"]
-        else:
-            values.update(
-                {
-                    "val_crossentropy": metrics["loss_xent"],
-                    "val_syllcount": metrics["loss_nbsyll"],
-                }
-            )
+        values.update(
+            {
+                "val_crossentropy": metrics["loss_xent"],
+                "val_syllcount": metrics["loss_nbsyll"],
+            }
+        )
         self._log_dict(values, prog_bar=True)
         return metrics["loss"]
 
@@ -235,18 +193,14 @@ class DASModel(L.LightningModule):
         del batch_idx
         metrics = self._shared_step(batch, include_metrics=True)
         values = {"test_loss": metrics["loss"]}
-        if self.is_timestamp_decoder:
-            values["test_token_acc"] = metrics["acc"]
-            values["test_activity_loss"] = metrics["loss_activity"]
-        else:
-            values.update(
-                {
-                    "test_acc": metrics["acc"],
-                    "test_f1": metrics["f1"],
-                    "test_precision": metrics["precision"],
-                    "test_recall": metrics["recall"],
-                }
-            )
+        values.update(
+            {
+                "test_acc": metrics["acc"],
+                "test_f1": metrics["f1"],
+                "test_precision": metrics["precision"],
+                "test_recall": metrics["recall"],
+            }
+        )
         self._log_dict(values, prog_bar=True)
         return metrics["loss"]
 
@@ -254,8 +208,6 @@ class DASModel(L.LightningModule):
         del batch_idx
         inputs, input_lengths, _, _ = self._unpack_batch(batch)
         outputs, output_lengths = self.forward(inputs, input_lengths)
-        if self.is_timestamp_decoder:
-            return self.decoder.tokens_to_triples(outputs, output_lengths)
         return outputs, output_lengths
 
     def configure_optimizers(self):
@@ -279,41 +231,7 @@ class DASModel(L.LightningModule):
         }
 
     def _shared_step(self, batch, include_metrics: bool) -> dict[str, torch.Tensor]:
-        inputs, input_lengths, targets, target_lengths = self._unpack_batch(batch)
-        if self.is_timestamp_decoder:
-            tokens = self.decoder.triples_to_tokens(targets, target_lengths)
-            tokens = tokens[:, : 2 + 3 * int(target_lengths.max().item())]
-            token_targets = tokens[:, 1:]
-            logits, activity_logits, output_lengths = self.forward(
-                inputs,
-                input_lengths,
-                decoder_input_ids=tokens[:, :-1],
-                return_activity=True,
-            )
-            flat_logits = logits.reshape(-1, self.decoder.vocab_size)
-            flat_targets = token_targets.reshape(-1)
-            token_loss = self.criterion(flat_logits, flat_targets)
-            activity_targets = self.decoder.triples_to_activity(targets, target_lengths, activity_logits.shape[1])
-            valid_activity = (
-                torch.arange(activity_logits.shape[1], device=activity_logits.device).unsqueeze(0)
-                < output_lengths.unsqueeze(1)
-            )
-            binary_targets = activity_targets[valid_activity]
-            activity_loss = nn.functional.binary_cross_entropy_with_logits(
-                activity_logits[valid_activity],
-                binary_targets,
-            )
-            loss = token_loss + activity_loss
-            valid = flat_targets.ne(TimestampDecoder.PAD)
-            accuracy = torch.argmax(flat_logits, dim=-1).eq(flat_targets)[valid].float().mean()
-            return {
-                "loss": loss,
-                "loss_xent": token_loss,
-                "loss_activity": activity_loss,
-                "loss_nbsyll": loss.new_tensor(0.0),
-                "acc": accuracy,
-            }
-
+        inputs, input_lengths, targets, _ = self._unpack_batch(batch)
         logits, _ = self.forward(inputs, input_lengths)
         logits, target_indices = self._align_logits_and_targets(logits, targets)
 

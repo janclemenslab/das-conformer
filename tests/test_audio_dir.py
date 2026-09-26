@@ -90,40 +90,6 @@ def test_audio_dir_training_batches_include_targets(tmp_path: Path):
     assert torch.equal(target_lengths, torch.tensor([33]))
 
 
-def test_timestamp_targets_preserve_nested_overlapping_segments_and_events(tmp_path: Path):
-    audio_path = _write_audio(tmp_path / "annotated.wav", samplerate=1_000, samples=100)
-    annotations = pd.DataFrame(
-        [
-            {"name": "song", "start_seconds": 0.012, "stop_seconds": 0.088},
-            {"name": "song", "start_seconds": 0.025, "stop_seconds": 0.055},
-            {"name": "pulse", "start_seconds": 0.045, "stop_seconds": 0.045},
-            {"name": "song", "start_seconds": 0.025, "stop_seconds": 0.045},
-        ]
-    )
-    dataset = AudioDirGenerator(
-        num_time_steps=100,
-        chunk_stride=100,
-        audio_files=[audio_path],
-        annotations=[annotations],
-        class_names=["noise", "song", "pulse"],
-        class_types=["segment", "segment", "event"],
-        target_mode="timestamp",
-        max_length=14,
-        hop_s=0.01,
-    )
-
-    _inputs, _input_length, targets, target_length = dataset[0]
-
-    assert targets.shape == (4, 3)
-    assert target_length == 4
-    assert targets.tolist() == [
-        [1, 1, 9],
-        [3, 1, 5],
-        [3, 1, 6],
-        [5, 2, 5],
-    ]
-
-
 def test_clipping_to_overlapping_chunk_intervals_does_not_duplicate_annotations():
     annotations = pd.DataFrame(
         [{"name": "pulse", "start_seconds": 0.75, "stop_seconds": 0.75}]
@@ -135,46 +101,6 @@ def test_clipping_to_overlapping_chunk_intervals_does_not_duplicate_annotations(
     )
 
     assert clipped.to_dict("records") == annotations.to_dict("records")
-
-
-def test_timestamp_targets_raise_when_chunk_exceeds_token_capacity(tmp_path: Path):
-    audio_path = _write_audio(tmp_path / "annotated.wav", samplerate=1_000, samples=100)
-    annotations = pd.DataFrame(
-        [
-            {"name": "song", "start_seconds": 0.01 * index, "stop_seconds": 0.01 * index + 0.005}
-            for index in range(3)
-        ]
-    )
-    dataset = AudioDirGenerator(
-        num_time_steps=100,
-        chunk_stride=100,
-        audio_files=[audio_path],
-        annotations=[annotations],
-        class_names=["noise", "song"],
-        target_mode="timestamp",
-        max_length=8,
-        hop_s=0.01,
-    )
-
-    with pytest.raises(ValueError, match="supports at most 2"):
-        dataset[0]
-
-
-def test_timestamp_datamodule_requires_segment_to_fit_chunk_overlap(tmp_path: Path):
-    audio_path = _write_audio(tmp_path / "annotated.wav", samplerate=1_000, samples=200)
-    pd.DataFrame(
-        [{"name": "song", "start_seconds": 0.05, "stop_seconds": 0.08}]
-    ).to_csv(tmp_path / f"{audio_path.stem}_annotations.csv", index=False)
-
-    with pytest.raises(ValueError, match="chunk overlap of 20"):
-        AudioDirDataModule(
-            data_dir=str(tmp_path),
-            num_time_steps=100,
-            chunk_stride=80,
-            target_mode="timestamp",
-            num_workers=0,
-            persistent_workers=False,
-        )
 
 
 def test_audio_dir_predict_batches_do_not_require_annotations(tmp_path: Path):

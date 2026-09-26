@@ -187,28 +187,6 @@ def test_attention_decoder_round_trip_preserves_decoder_settings(tmp_path: Path)
     assert loaded.attention_decoder.dropout == 0.25
 
 
-def test_timestamp_decoder_round_trip_preserves_decoder_settings(tmp_path: Path):
-    state = TrainGuiState()
-    state.paths.data_dir = "/tmp/audio"
-    state.paths.output_dir = "/tmp/run"
-    state.model_selection.decoder_type = "timestamp"
-    state.timestamp_decoder.num_heads = 2
-    state.timestamp_decoder.num_layers = 3
-    state.timestamp_decoder.dropout = 0.25
-    state.timestamp_decoder.max_length = 77
-
-    config = train_gui_state_to_config(state)
-    path = tmp_path / "train.yaml"
-    path.write_text(format_train_config_yaml(config), encoding="utf-8")
-    loaded = load_train_gui_state_from_yaml(str(path))
-
-    assert loaded.model_selection.decoder_type == "timestamp"
-    assert loaded.timestamp_decoder.num_heads == 2
-    assert loaded.timestamp_decoder.num_layers == 3
-    assert loaded.timestamp_decoder.dropout == 0.25
-    assert loaded.timestamp_decoder.max_length == 77
-
-
 def test_whisperseg_gui_round_trip_preserves_dummy_frontend_and_decoder(tmp_path: Path):
     state = TrainGuiState()
     state.paths.data_dir = "/tmp/audio"

@@ -15,7 +15,6 @@ from qtpy.QtCore import QObject, QThread, QTimer, Signal, Qt
 from qtpy.QtGui import QFontDatabase, QTextCursor
 from qtpy.QtWidgets import (
     QApplication,
-    QBoxLayout,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -38,10 +37,7 @@ import yaml
 
 from .config import (
     BUILTIN_CONFIG_OPTIONS,
-    PRETRAINED_ENCODERS,
     TRAIN_DATASET_HF_OPTIONS,
-    format_config_yaml,
-    save_config,
 )
 from .gui_helpers import (
     AttentionDecoderState,
@@ -54,7 +50,6 @@ from .gui_helpers import (
     ConvFrontendState,
     DataSectionState,
     EncoderSettingsState,
-    PretrainedEncoderState,
     EvaluationSectionState,
     LSTMDecoderState,
     MelFrontendState,
@@ -67,7 +62,6 @@ from .gui_helpers import (
     PredictionSectionState,
     STFTFrontendState,
     TCNEncoderState,
-    TimestampDecoderState,
     TweetynetEncoderState,
     TrainGuiState,
     TrainPathsState,
@@ -75,9 +69,6 @@ from .gui_helpers import (
     TrainerSectionState,
     WhisperSegDecoderState,
     WhisperSegFrontendState,
-    _format_optional_number,
-    _optional_float,
-    _optional_int,
     browser_initial_path,
     describe_dataset_path,
     format_predict_config_yaml,
@@ -91,22 +82,17 @@ from .gui_helpers import (
     train_config_to_gui_state,
     train_gui_state_to_config,
 )
-from . import labeling
-from .api import _is_whisperseg_predict_source, _load_checkpoint_metadata, label as label_command, predict, train
+from .api import _is_whisperseg_predict_source, _load_checkpoint_metadata, predict, train
 
 LineText = Annotated[str, {"widget_type": "LineEdit"}]
-DEFAULT_PRETRAINED_MODEL_IDS: dict[str, str] = {}
 PositiveInt = Annotated[int, {"widget_type": "SpinBox", "min": 1, "max": 1_000_000}]
-TimestampLength = Annotated[int, {"widget_type": "SpinBox", "min": 5, "max": 1_000_000}]
 NonNegativeInt = Annotated[int, {"widget_type": "SpinBox", "min": 0, "max": 1_000_000}]
 FloatValue = Annotated[float, {"widget_type": "FloatSpinBox", "min": 0.0, "max": 1_000_000.0}]
 BoolValue = Annotated[bool, {"widget_type": "CheckBox"}]
 CurrentAudioProvider = Callable[[float, float | None], tuple[np.ndarray, int, float]]
 CurrentDurationProvider = Callable[[], float]
 AnnotatedRegionProvider = Callable[[], tuple[float, float] | Sequence[tuple[float, float]]]
-CurrentAnnotationsProvider = Callable[[], pd.DataFrame]
 PredictionCallback = Callable[[pd.DataFrame, float], None]
-LabelCallback = Callable[[pd.DataFrame, float], None]
 
 MODEL_CLASS_LABELS = {"das": "DAS", "whisperseg": "WhisperSeg"}
 MODEL_CLASS_VALUES = {label: value for value, label in MODEL_CLASS_LABELS.items()}
@@ -219,15 +205,6 @@ class TweetynetEncoderForm:
 
 
 @guiclass
-class PretrainedEncoderForm:
-    sample_rate: LineText = ""
-    embedding_dim: LineText = ""
-    window_seconds: LineText = ""
-    hop_seconds: LineText = ""
-    cache_dir: LineText = ""
-
-
-@guiclass
 class LSTMDecoderForm:
     hidden_size: PositiveInt = 64
 
@@ -242,14 +219,6 @@ class AttentionDecoderForm:
     num_heads: PositiveInt = 4
     num_layers: PositiveInt = 2
     dropout: FloatValue = 0.1
-
-
-@guiclass
-class TimestampDecoderForm:
-    num_heads: PositiveInt = TimestampDecoderState.num_heads
-    num_layers: PositiveInt = TimestampDecoderState.num_layers
-    dropout: FloatValue = TimestampDecoderState.dropout
-    max_length: TimestampLength = TimestampDecoderState.max_length
 
 
 @guiclass
@@ -317,48 +286,6 @@ class PredictEvaluationForm:
     evaluate: BoolValue = PredictionSectionState.evaluate
     split: Literal["", "train", "val", "test"] = PredictionSectionState.split
     syllable_tolerance_ms: FloatValue = PredictionSectionState.syllable_tolerance_ms
-
-
-@guiclass
-class LabelItemsForm:
-    label_items: Literal["segments", "windows"] = "segments"
-    label_window_seconds: FloatValue = 0.1
-    label_window_stride_seconds: FloatValue = 0.05
-
-
-@guiclass
-class LabelSpectrogramForm:
-    frontend_type: Literal["mel", "stft"] = "mel"
-    frontend_num_channels: PositiveInt = 128
-    frontend_kernel_size: PositiveInt = 1024
-    frontend_hop_seconds: LineText = "0.004"
-    frontend_fmin: FloatValue = 100.0
-    frontend_fmax: LineText = ""
-    label_time_bins: PositiveInt = 64
-    label_log_scale: BoolValue = True
-    label_amplitude_normalize: BoolValue = True
-
-
-@guiclass
-class LabelEmbeddingForm:
-    label_embedding: Literal["umap", "tsne"] = "umap"
-    label_random_state: LineText = "0"
-    label_umap_n_neighbors: PositiveInt = 15
-    label_umap_min_dist: FloatValue = 0.1
-    label_tsne_perplexity: FloatValue = 30.0
-
-
-@guiclass
-class LabelClusteringForm:
-    label_hdbscan_min_cluster_size: PositiveInt = 5
-    label_hdbscan_min_samples: LineText = ""
-    label_hdbscan_cluster_selection_epsilon: FloatValue = 0.0
-
-
-@guiclass
-class LabelExportForm:
-    output_suffix: LineText = PredictionSectionState.output_suffix
-    merge: BoolValue = False
 
 
 @guiclass
@@ -663,74 +590,6 @@ class PathField(QWidget):
 LOCAL_INITIAL_MODEL_OPTION = "Local checkpoint"
 LOCAL_DATA_SOURCE = "Local data directory"
 HF_DATA_SOURCE = "Hugging Face dataset"
-
-
-class EmbeddingModelField(QWidget):
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.combo = QComboBox()
-        self.file_field = PathField(
-            label="Model file", selection_mode="file", dialog_filter="Embedding models (*.pt2);;All files (*)",
-            config_field="encoder_checkpoint",
-        )
-        self.file_field.label.hide()
-        self._encoder_type = None
-        self._model_id = ""
-        self._selected = {}
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("Embedding model"))
-        layout.addWidget(self.combo)
-        layout.addWidget(self.file_field)
-        self.combo.currentIndexChanged.connect(self._sync_file_field)
-
-    def set_encoder(self, encoder_type: str) -> None:
-        if encoder_type == self._encoder_type:
-            return
-        if self._encoder_type is not None:
-            self._selected[self._encoder_type] = self.value
-        self._encoder_type = encoder_type
-        self.combo.blockSignals(True)
-        self.combo.clear()
-        self.combo.addItem("Default model (Hugging Face)", ("", ""))
-        self.combo.addItem("Hugging Face variant…", "hf")
-        self.combo.addItem("Local file…", "local")
-        self.combo.blockSignals(False)
-        self.value = self._selected.get(encoder_type, ("", ""))
-
-    @property
-    def value(self) -> tuple[str, str]:
-        choice = self.combo.currentData()
-        if choice in ("hf", "local"):
-            source = self.file_field.value
-            if choice == "hf" and source and not source.startswith(("hf://", "https://")):
-                source = "hf://" + source
-            return self._model_id, source
-        return choice or ("", "")
-
-    @value.setter
-    def value(self, value: tuple[str, str]) -> None:
-        model_id, checkpoint = value
-        self._model_id = model_id
-        self.file_field.value = checkpoint
-        if checkpoint:
-            choice = "hf" if checkpoint.startswith(("hf://", "https://huggingface.co/")) else "local"
-            self.combo.setCurrentIndex(self.combo.findData(choice))
-        elif model_id and model_id != DEFAULT_PRETRAINED_MODEL_IDS[self._encoder_type]:
-            # Preserve existing configs that use an encoder's native model registry.
-            self.combo.addItem(model_id, (model_id, ""))
-            self.combo.setCurrentIndex(self.combo.count() - 1)
-        else:
-            self.combo.setCurrentIndex(0)
-        self._sync_file_field()
-
-    def _sync_file_field(self, *_args) -> None:
-        choice = self.combo.currentData()
-        self.file_field.setVisible(choice in ("hf", "local"))
-        self.file_field.browse_button.setVisible(choice == "local")
-        self.file_field.line_edit.setPlaceholderText(
-            "owner/repository/model.pt2 or Hugging Face file link" if choice == "hf" else "Select a model file"
-        )
 
 
 class InitialModelField(QWidget):
@@ -1174,55 +1033,6 @@ class PredictPathsWidget(QWidget):
         self.output_dir_field.setEnabled(enabled)
 
 
-class LabelPathsWidget(QWidget):
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.data_dir_field = PathField(
-            label="Audio file or folder",
-            selection_mode="file_or_directory",
-            placeholder="/path/to/audio-file-or-folder",
-            dialog_filter="Audio files (*.wav *.flac *.aiff *.aif *.h5 *.hdf5 *.mat *.zarr *.npz *.npy *.mmap);;All files (*)",
-            config_field="data_dir",
-        )
-        self.output_dir_field = PathField(
-            label="Output directory",
-            selection_mode="directory",
-            placeholder="/path/to/labels",
-            config_field="output_dir",
-        )
-        self.data_dir_field.path_selected.connect(self._set_output_dir_from_data_selection)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(4)
-        layout.addWidget(self.data_dir_field)
-        layout.addWidget(self.output_dir_field)
-        layout.addStretch(1)
-
-    @property
-    def data_dir(self) -> str:
-        return self.data_dir_field.value
-
-    @data_dir.setter
-    def data_dir(self, path: str) -> None:
-        self.data_dir_field.value = path
-
-    @property
-    def output_dir(self) -> str:
-        return self.output_dir_field.value
-
-    @output_dir.setter
-    def output_dir(self, path: str) -> None:
-        self.output_dir_field.value = path
-
-    def _set_output_dir_from_data_selection(self, path: str) -> None:
-        selected = Path(path).expanduser()
-        self.output_dir = str(selected if selected.is_dir() else selected.parent)
-
-    def set_folder_fields_enabled(self, enabled: bool) -> None:
-        self.data_dir_field.setEnabled(enabled)
-        self.output_dir_field.setEnabled(enabled)
-
-
 class CurrentAudioWidget(QWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1313,13 +1123,9 @@ class ModelSectionWidget(QWidget):
         self.conformer_encoder_form = ConformerEncoderForm()
         self.tcn_encoder_form = TCNEncoderForm()
         self.tweetynet_encoder_form = TweetynetEncoderForm()
-        self.pretrained_encoder_form = PretrainedEncoderForm()
-        self.embedding_model_field = EmbeddingModelField()
-        _set_form_tooltips(self.pretrained_encoder_form, {name: f"encoder_{name}" for name in vars(PretrainedEncoderState())})
         self.lstm_decoder_form = LSTMDecoderForm()
         self.conv_decoder_form = ConvDecoderForm()
         self.attention_decoder_form = AttentionDecoderForm()
-        self.timestamp_decoder_form = TimestampDecoderForm()
         self.whisperseg_decoder_form = WhisperSegDecoderForm()
         self.hyperparameters_form = ModelHyperparametersForm()
         self.postprocessing_widget = TrainPostprocessingSectionWidget()
@@ -1417,15 +1223,6 @@ class ModelSectionWidget(QWidget):
             },
         )
         _set_form_tooltips(
-            self.timestamp_decoder_form,
-            {
-                "num_heads": "decoder_num_heads",
-                "num_layers": "decoder_num_layers",
-                "dropout": "decoder_dropout",
-                "max_length": "max_length",
-            },
-        )
-        _set_form_tooltips(
             self.whisperseg_decoder_form,
             {
                 "decoder_dropout": "decoder_dropout",
@@ -1486,19 +1283,12 @@ class ModelSectionWidget(QWidget):
         self.encoder_stack.addWidget(self.conformer_encoder_form.gui.native)
         self.encoder_stack.addWidget(self.tcn_encoder_form.gui.native)
         self.encoder_stack.addWidget(self.tweetynet_encoder_form.gui.native)
-        self.pretrained_encoder_panel = QWidget()
-        pretrained_layout = QVBoxLayout(self.pretrained_encoder_panel)
-        pretrained_layout.setContentsMargins(0, 0, 0, 0)
-        pretrained_layout.addWidget(self.embedding_model_field)
-        pretrained_layout.addWidget(self.pretrained_encoder_form.gui.native)
-        self.encoder_stack.addWidget(self.pretrained_encoder_panel)
 
         self.decoder_stack = QStackedWidget()
         self.decoder_stack.addWidget(QWidget())
         self.decoder_stack.addWidget(self.lstm_decoder_form.gui.native)
         self.decoder_stack.addWidget(self.conv_decoder_form.gui.native)
         self.decoder_stack.addWidget(self.attention_decoder_form.gui.native)
-        self.decoder_stack.addWidget(self.timestamp_decoder_form.gui.native)
 
         for form in (
             self.chunking_form,
@@ -1510,11 +1300,9 @@ class ModelSectionWidget(QWidget):
             self.conformer_encoder_form,
             self.tcn_encoder_form,
             self.tweetynet_encoder_form,
-            self.pretrained_encoder_form,
             self.lstm_decoder_form,
             self.conv_decoder_form,
             self.attention_decoder_form,
-            self.timestamp_decoder_form,
             self.whisperseg_decoder_form,
             self.hyperparameters_form,
         ):
@@ -1660,21 +1448,13 @@ class ModelSectionWidget(QWidget):
         self._sync_stacks()
 
     def _sync_stacks(self, *_args) -> None:
-        pretrained = self.encoder_type.currentText() in PRETRAINED_ENCODERS
-        if pretrained:
-            self.embedding_model_field.set_encoder(self.encoder_type.currentText())
-            self.frontend_type.setCurrentText("raw")
-            self.encoder_settings_form.freeze_encoder = True
-        self.frontend_type.setEnabled(not pretrained)
-        _set_magicgui_field_enabled(self.encoder_settings_form.gui.freeze_encoder, not pretrained)
         frontend_type = self.frontend_type.currentText()
         frontend_index = DAS_FRONTEND_OPTIONS.index(frontend_type)
         self.frontend_stack.setCurrentIndex(3 if frontend_type == "conv_resnet" else frontend_index)
-        self.encoder_stack.setCurrentIndex(3 if pretrained else DAS_ENCODER_OPTIONS.index(self.encoder_type.currentText()))
+        self.encoder_stack.setCurrentIndex(DAS_ENCODER_OPTIONS.index(self.encoder_type.currentText()))
         self.decoder_stack.setCurrentIndex(DAS_DECODER_OPTIONS.index(self.decoder_type.currentText()))
         whisperseg_training_enabled = self._model_class_value() == "whisperseg"
         _set_magicgui_field_visible(self.encoder_settings_form.gui.freeze_encoder, whisperseg_training_enabled)
-        timestamp_decoder_enabled = self.decoder_type.currentText() == "timestamp"
         if (
             whisperseg_training_enabled
             and self.hyperparameters_form.reduce_lr
@@ -1683,9 +1463,9 @@ class ModelSectionWidget(QWidget):
             self.hyperparameters_form.reduce_lr = False
         _set_magicgui_field_visible(
             self.hyperparameters_form.gui.cross_entropy_weight,
-            not whisperseg_training_enabled and not timestamp_decoder_enabled,
+            not whisperseg_training_enabled,
         )
-        self.postprocessing_section.setVisible(not timestamp_decoder_enabled and not whisperseg_training_enabled)
+        self.postprocessing_section.setVisible(not whisperseg_training_enabled)
         for field_name in ("linear_lr_schedule", "weight_decay", "warmup_steps"):
             widget = getattr(self.hyperparameters_form.gui, field_name, None)
             if widget is not None:
@@ -1715,13 +1495,9 @@ class ModelSectionWidget(QWidget):
         _assign_to_form(self.conformer_encoder_form, state.conformer_encoder)
         _assign_to_form(self.tcn_encoder_form, state.tcn_encoder)
         _assign_to_form(self.tweetynet_encoder_form, state.tweetynet_encoder)
-        _assign_to_form(self.pretrained_encoder_form, state.pretrained_encoder)
-        if state.model_selection.encoder_type in PRETRAINED_ENCODERS:
-            self.embedding_model_field.value = (state.pretrained_encoder.model_id, state.pretrained_encoder.checkpoint)
         _assign_to_form(self.lstm_decoder_form, state.lstm_decoder)
         _assign_to_form(self.conv_decoder_form, state.conv_decoder)
         _assign_to_form(self.attention_decoder_form, state.attention_decoder)
-        _assign_to_form(self.timestamp_decoder_form, state.timestamp_decoder)
         _assign_to_form(self.whisperseg_decoder_form, state.whisperseg_decoder)
         _assign_to_form(self.hyperparameters_form, state.model_hyperparameters)
         _assign_to_form(self.chunking_form, state.data)
@@ -1754,14 +1530,6 @@ class ModelSectionWidget(QWidget):
 
     def encoder_settings_state(self) -> EncoderSettingsState:
         return _copy_from_form(EncoderSettingsState, self.encoder_settings_form)
-
-    def pretrained_encoder_state(self) -> PretrainedEncoderState:
-        state = _copy_from_form(PretrainedEncoderState, self.pretrained_encoder_form)
-        if self.encoder_type.currentText() in PRETRAINED_ENCODERS:
-            state.model_id, state.checkpoint = self.embedding_model_field.value
-            if self.embedding_model_field.combo.currentData() in ("hf", "local") and not state.checkpoint:
-                raise ValueError("Select an embedding model file or choose the default model.")
-        return state
 
     def stft_frontend_state(self) -> STFTFrontendState:
         return STFTFrontendState(
@@ -1811,9 +1579,6 @@ class ModelSectionWidget(QWidget):
 
     def attention_decoder_state(self) -> AttentionDecoderState:
         return _copy_from_form(AttentionDecoderState, self.attention_decoder_form)
-
-    def timestamp_decoder_state(self) -> TimestampDecoderState:
-        return _copy_from_form(TimestampDecoderState, self.timestamp_decoder_form)
 
     def whisperseg_decoder_state(self) -> WhisperSegDecoderState:
         return _copy_from_form(WhisperSegDecoderState, self.whisperseg_decoder_form)
@@ -2051,11 +1816,9 @@ class TrainCommandWidget(QWidget):
             conformer_encoder=self.model_section.conformer_encoder_state(),
             tcn_encoder=self.model_section.tcn_encoder_state(),
             tweetynet_encoder=self.model_section.tweetynet_encoder_state(),
-            pretrained_encoder=self.model_section.pretrained_encoder_state(),
             lstm_decoder=self.model_section.lstm_decoder_state(),
             conv_decoder=self.model_section.conv_decoder_state(),
             attention_decoder=self.model_section.attention_decoder_state(),
-            timestamp_decoder=self.model_section.timestamp_decoder_state(),
             whisperseg_decoder=self.model_section.whisperseg_decoder_state(),
             model_hyperparameters=self.model_section.hyperparameter_state(),
             trainer=_copy_from_form(TrainerSectionState, self.trainer_form),
@@ -2294,333 +2057,6 @@ class PredictCommandWidget(QWidget):
         return str(config.output_dir and f"{config.output_dir}/predict-config.yaml" or "predict-config.yaml")
 
 
-class LabelPlotWindow(QMainWindow):
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent, Qt.Window)
-        self._result: labeling.LabelingResult | None = None
-        self.setWindowTitle("Label Scatter Plot")
-        self.resize(900, 700)
-        self.color_combo = QComboBox()
-        self.color_combo.addItems(["HDBSCAN label", "True label"])
-        self.plot_widget, self._pg = self._create_plot_widget()
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.addWidget(self.color_combo)
-        layout.addWidget(self.plot_widget, 1)
-        self.setCentralWidget(container)
-        self.color_combo.currentTextChanged.connect(lambda *_args: self.display_result(self._result))
-
-    def _create_plot_widget(self) -> tuple[QWidget, object | None]:
-        try:
-            import pyqtgraph as pg
-        except Exception:
-            label = QLabel("Install `das[labeling]` to show the labeling scatter plot.")
-            label.setWordWrap(True)
-            return label, None
-        plot = pg.PlotWidget()
-        plot.setBackground("w")
-        plot.showGrid(x=True, y=True, alpha=0.25)
-        return plot, pg
-
-    def display_result(self, result: labeling.LabelingResult | None) -> None:
-        if result is None:
-            return
-        self._result = result
-        if self._pg is None:
-            return
-        self.plot_widget.clear()
-        embedding = np.asarray(result.embedding)
-        if embedding.size == 0:
-            return
-        labels = self._plot_labels(result)
-        for label_value in list(dict.fromkeys(labels)):
-            indices = np.asarray([value == label_value for value in labels], dtype=bool)
-            color = self._plot_color(label_value)
-            item = self._pg.ScatterPlotItem(
-                x=embedding[indices, 0],
-                y=embedding[indices, 1],
-                size=7,
-                brush=self._pg.mkBrush(color),
-                pen=self._pg.mkPen(None),
-                name=str(label_value),
-            )
-            self.plot_widget.addItem(item)
-
-    def _plot_labels(self, result: labeling.LabelingResult) -> list[str]:
-        if self.color_combo.currentText() == "True label":
-            return [str(value or "unlabeled") for value in result.items["true_label"].tolist()]
-        return [str(int(value)) for value in result.cluster_labels]
-
-    def _plot_color(self, label_value: str) -> tuple[int, int, int]:
-        if label_value == "-1":
-            return (160, 160, 160)
-        palette = (
-            (31, 119, 180),
-            (255, 127, 14),
-            (44, 160, 44),
-            (214, 39, 40),
-            (148, 103, 189),
-            (140, 86, 75),
-            (227, 119, 194),
-            (127, 127, 127),
-            (188, 189, 34),
-            (23, 190, 207),
-        )
-        return palette[abs(hash(label_value)) % len(palette)]
-
-
-class LabelCommandWidget(QWidget):
-    def __init__(self, *, current_audio_available: bool = False, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.current_audio_available = current_audio_available
-        self._result: labeling.LabelingResult | None = None
-        self.source_combo = QComboBox()
-        if current_audio_available:
-            self.source_combo.addItem("Current audio")
-        self.source_combo.addItem("File or folder")
-        self.current_audio_widget = CurrentAudioWidget()
-        self.paths_form = LabelPathsWidget()
-        self.items_form = LabelItemsForm()
-        self.spectrogram_form = LabelSpectrogramForm()
-        self.embedding_form = LabelEmbeddingForm()
-        self.clustering_form = LabelClusteringForm()
-        self.export_form = LabelExportForm()
-        self.plot_window = LabelPlotWindow(self)
-        self.plot_widget = self.plot_window.plot_widget
-        self.color_combo = self.plot_window.color_combo
-        self.open_plot_button = QPushButton("Open scatter plot")
-        self.plot_status_label = QLabel("Run labeling to populate the plot.")
-        self.plot_status_label.setWordWrap(True)
-
-        _set_form_tooltips(
-            self.items_form,
-            {
-                "label_items": "label_items",
-                "label_window_seconds": "label_window_seconds",
-                "label_window_stride_seconds": "label_window_stride_seconds",
-            },
-        )
-        _set_form_tooltips(
-            self.spectrogram_form,
-            {
-                "frontend_type": "frontend_type",
-                "frontend_num_channels": "frontend_num_channels",
-                "frontend_kernel_size": "frontend_kernel_size",
-                "frontend_hop_seconds": "frontend_hop_seconds",
-                "frontend_fmin": "frontend_fmin",
-                "frontend_fmax": "frontend_fmax",
-                "label_time_bins": "label_time_bins",
-                "label_log_scale": "label_log_scale",
-                "label_amplitude_normalize": "label_amplitude_normalize",
-            },
-        )
-        _set_form_tooltips(
-            self.embedding_form,
-            {
-                "label_embedding": "label_embedding",
-                "label_random_state": "label_random_state",
-                "label_umap_n_neighbors": "label_umap_n_neighbors",
-                "label_umap_min_dist": "label_umap_min_dist",
-                "label_tsne_perplexity": "label_tsne_perplexity",
-            },
-        )
-        _set_form_tooltips(
-            self.clustering_form,
-            {
-                "label_hdbscan_min_cluster_size": "label_hdbscan_min_cluster_size",
-                "label_hdbscan_min_samples": "label_hdbscan_min_samples",
-                "label_hdbscan_cluster_selection_epsilon": "label_hdbscan_cluster_selection_epsilon",
-            },
-        )
-        _set_form_tooltips(self.export_form, {"output_suffix": "output_suffix", "merge": "merge"})
-        _set_form_labels(
-            self.items_form,
-            {
-                "label_items": "Source",
-                "label_window_seconds": "Window seconds",
-                "label_window_stride_seconds": "Stride seconds",
-            },
-        )
-        _set_form_labels(
-            self.spectrogram_form,
-            {
-                "frontend_type": "Type",
-                "frontend_num_channels": "Channels",
-                "frontend_kernel_size": "Kernel size",
-                "frontend_hop_seconds": "Hop seconds",
-                "frontend_fmin": "Minimum frequency",
-                "frontend_fmax": "Maximum frequency",
-                "label_time_bins": "Time bins",
-                "label_log_scale": "Log scale",
-                "label_amplitude_normalize": "Amplitude normalize",
-            },
-        )
-        _set_form_labels(
-            self.embedding_form,
-            {
-                "label_embedding": "Method",
-                "label_random_state": "Random state",
-                "label_umap_n_neighbors": "UMAP neighbors",
-                "label_umap_min_dist": "UMAP min dist",
-                "label_tsne_perplexity": "t-SNE perplexity",
-            },
-        )
-        _set_form_labels(
-            self.clustering_form,
-            {
-                "label_hdbscan_min_cluster_size": "Min cluster size",
-                "label_hdbscan_min_samples": "Min samples",
-                "label_hdbscan_cluster_selection_epsilon": "Selection epsilon",
-            },
-        )
-        _set_placeholder(self.spectrogram_form.gui.frontend_fmax, "Nyquist frequency")
-        _set_placeholder(self.embedding_form.gui.label_random_state, "none")
-        _set_placeholder(self.clustering_form.gui.label_hdbscan_min_samples, "min_cluster_size")
-
-        self.content_panel = _three_column_sections(
-            (
-                ("Source", self._source_panel()),
-                ("Paths", self.paths_form),
-                ("Export", self.export_form.gui.native),
-            ),
-            (
-                ("Items", self.items_form.gui.native),
-                ("Spectrogram", self.spectrogram_form.gui.native),
-            ),
-            (
-                ("Embedding", self.embedding_form.gui.native),
-                ("HDBSCAN", self.clustering_form.gui.native),
-                ("Plot", self._plot_panel()),
-            ),
-        )
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(_wrap_widget(self.content_panel))
-        self.source_combo.currentTextChanged.connect(self._sync_label_source)
-        self.open_plot_button.clicked.connect(self.open_plot_window)
-        for field_name in (
-            "label_hdbscan_min_cluster_size",
-            "label_hdbscan_min_samples",
-            "label_hdbscan_cluster_selection_epsilon",
-        ):
-            getattr(self.clustering_form.gui, field_name).changed.connect(self.recluster_cached_result)
-        self._sync_label_source()
-
-    def _source_panel(self) -> QWidget:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.addWidget(self.source_combo)
-        layout.addWidget(self.current_audio_widget)
-        layout.addStretch(1)
-        return container
-
-    def _plot_panel(self) -> QWidget:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.open_plot_button)
-        layout.addWidget(self.plot_status_label)
-        layout.addStretch(1)
-        return container
-
-    def open_plot_window(self) -> None:
-        self.plot_window.display_result(self._result)
-        self.plot_window.show()
-        self.plot_window.raise_()
-        self.plot_window.activateWindow()
-
-    def _sync_label_source(self, *_args) -> None:
-        current_audio = self.uses_current_audio()
-        self.current_audio_widget.setVisible(current_audio)
-        self.paths_form.set_folder_fields_enabled(not current_audio)
-
-    def uses_current_audio(self) -> bool:
-        return self.source_combo.currentText() == "Current audio"
-
-    def current_audio_request(self) -> tuple[float, float | None]:
-        return self.current_audio_widget.request()
-
-    def build_config(self) -> Config:
-        return Config(
-            mode="label",
-            data_dir="" if self.uses_current_audio() else self.paths_form.data_dir,
-            output_dir="" if self.uses_current_audio() else self.paths_form.output_dir,
-            output_suffix=self.export_form.output_suffix,
-            merge=bool(self.export_form.merge),
-            frontend_type=str(self.spectrogram_form.frontend_type),
-            frontend_num_channels=int(self.spectrogram_form.frontend_num_channels),
-            frontend_kernel_size=int(self.spectrogram_form.frontend_kernel_size),
-            frontend_hop_seconds=float(self.spectrogram_form.frontend_hop_seconds),
-            frontend_fmin=float(self.spectrogram_form.frontend_fmin),
-            frontend_fmax=_optional_float(self.spectrogram_form.frontend_fmax),
-            label_items=str(self.items_form.label_items),
-            label_window_seconds=float(self.items_form.label_window_seconds),
-            label_window_stride_seconds=float(self.items_form.label_window_stride_seconds),
-            label_time_bins=int(self.spectrogram_form.label_time_bins),
-            label_log_scale=bool(self.spectrogram_form.label_log_scale),
-            label_amplitude_normalize=bool(self.spectrogram_form.label_amplitude_normalize),
-            label_embedding=str(self.embedding_form.label_embedding),
-            label_random_state=_optional_int(self.embedding_form.label_random_state),
-            label_umap_n_neighbors=int(self.embedding_form.label_umap_n_neighbors),
-            label_umap_min_dist=float(self.embedding_form.label_umap_min_dist),
-            label_tsne_perplexity=float(self.embedding_form.label_tsne_perplexity),
-            label_hdbscan_min_cluster_size=int(self.clustering_form.label_hdbscan_min_cluster_size),
-            label_hdbscan_min_samples=_optional_int(self.clustering_form.label_hdbscan_min_samples),
-            label_hdbscan_cluster_selection_epsilon=float(
-                self.clustering_form.label_hdbscan_cluster_selection_epsilon
-            ),
-        )
-
-    def load_config(self, config: Config) -> None:
-        self.paths_form.data_dir = str(config.data_dir)
-        self.paths_form.output_dir = str(config.output_dir)
-        self.export_form.output_suffix = str(config.output_suffix)
-        self.export_form.merge = bool(config.merge)
-        self.items_form.label_items = str(config.label_items)
-        self.items_form.label_window_seconds = float(config.label_window_seconds)
-        self.items_form.label_window_stride_seconds = float(config.label_window_stride_seconds)
-        self.spectrogram_form.frontend_type = "stft" if config.frontend_type == "stft" else "mel"
-        self.spectrogram_form.frontend_num_channels = int(config.frontend_num_channels or 128)
-        self.spectrogram_form.frontend_kernel_size = int(config.frontend_kernel_size or 1024)
-        self.spectrogram_form.frontend_hop_seconds = str(config.frontend_hop_seconds or 0.004)
-        self.spectrogram_form.frontend_fmin = float(config.frontend_fmin)
-        self.spectrogram_form.frontend_fmax = _format_optional_number(config.frontend_fmax)
-        self.spectrogram_form.label_time_bins = int(config.label_time_bins)
-        self.spectrogram_form.label_log_scale = bool(config.label_log_scale)
-        self.spectrogram_form.label_amplitude_normalize = bool(config.label_amplitude_normalize)
-        self.embedding_form.label_embedding = str(config.label_embedding)
-        self.embedding_form.label_random_state = _format_optional_number(config.label_random_state)
-        self.embedding_form.label_umap_n_neighbors = int(config.label_umap_n_neighbors)
-        self.embedding_form.label_umap_min_dist = float(config.label_umap_min_dist)
-        self.embedding_form.label_tsne_perplexity = float(config.label_tsne_perplexity)
-        self.clustering_form.label_hdbscan_min_cluster_size = int(config.label_hdbscan_min_cluster_size)
-        self.clustering_form.label_hdbscan_min_samples = _format_optional_number(config.label_hdbscan_min_samples)
-        self.clustering_form.label_hdbscan_cluster_selection_epsilon = float(
-            config.label_hdbscan_cluster_selection_epsilon
-        )
-
-    def default_save_path(self) -> str:
-        config = self.build_config()
-        return str(config.output_dir and f"{config.output_dir}/label-config.yaml" or "label-config.yaml")
-
-    def display_result(self, result: labeling.LabelingResult | None) -> None:
-        if result is None:
-            return
-        self._result = result
-        item_count = len(result.items)
-        self.plot_status_label.setText(f"{item_count} items available in the scatter plot.")
-        self.plot_window.display_result(result)
-
-    def recluster_cached_result(self, *_args) -> None:
-        if self._result is None:
-            return
-        try:
-            self.display_result(labeling.recluster_result(self._result, self.build_config()))
-        except Exception:
-            logging.debug("Failed to recluster cached labeling result.", exc_info=True)
-
-
 class _SignalWriter:
     def __init__(self, emit):
         self._emit = emit
@@ -2777,7 +2213,6 @@ class JobWorker(QObject):
         *,
         audio: np.ndarray | None = None,
         samplerate: int | None = None,
-        annotations: pd.DataFrame | None = None,
         time_offset_seconds: float = 0.0,
         predict_after_train: dict[str, object] | None = None,
         stop_event: threading.Event | None = None,
@@ -2789,7 +2224,6 @@ class JobWorker(QObject):
         self.config = config
         self.audio = audio
         self.samplerate = samplerate
-        self.annotations = annotations
         self.time_offset_seconds = time_offset_seconds
         self.predict_after_train = predict_after_train
         self.stop_event = stop_event
@@ -2910,19 +2344,6 @@ class JobWorker(QObject):
                         stop_event=self.stop_event,
                         log_emit=self.log.emit,
                     )
-                elif self.command_name == "label":
-                    if self.audio is not None:
-                        result = label_command(
-                            self.config,
-                            audio=self.audio,
-                            samplerate=self.samplerate,
-                            annotations=self.annotations,
-                            verbose=True,
-                            return_details=True,
-                        )
-                    else:
-                        result = label_command(self.config, verbose=True, return_details=True)
-                    prediction_after_train = None
                 elif self.audio is not None:
                     result = predict(self.config, audio=self.audio, samplerate=self.samplerate, verbose=True)
                     prediction_after_train = None
@@ -2952,29 +2373,24 @@ class DASConformerWindow(QMainWindow):
         self,
         *,
         startup_config: Config | None = None,
-        initial_tab: Literal["train", "predict", "label"] = "train",
+        initial_tab: Literal["train", "predict"] = "train",
         current_audio_provider: CurrentAudioProvider | None = None,
         current_duration_provider: CurrentDurationProvider | None = None,
         annotated_region_provider: AnnotatedRegionProvider | None = None,
-        current_annotations_provider: CurrentAnnotationsProvider | None = None,
         on_predictions: PredictionCallback | None = None,
-        on_labels: LabelCallback | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
         self.current_audio_provider = current_audio_provider
         self.current_duration_provider = current_duration_provider
         self.annotated_region_provider = annotated_region_provider
-        self.current_annotations_provider = current_annotations_provider
         self.on_predictions = on_predictions
-        self.on_labels = on_labels
         self.setWindowTitle("DAS")
         self.resize(1100, 850)
 
         self.command_tabs = QTabWidget()
         self.train_widget = TrainCommandWidget()
         self.predict_widget = PredictCommandWidget(current_audio_available=current_audio_provider is not None)
-        self.label_widget = LabelCommandWidget(current_audio_available=current_audio_provider is not None)
         self.command_tabs.addTab(self.train_widget, "Train")
         self.command_tabs.addTab(self.predict_widget, "Predict")
         self.command_tabs.currentChanged.connect(self._update_run_button)
@@ -3048,13 +2464,11 @@ class DASConformerWindow(QMainWindow):
             self.select_tab(initial_tab)
         self._refresh_predict_after_train_duration_default()
 
-    def select_tab(self, tab: Literal["train", "predict", "label"]) -> None:
+    def select_tab(self, tab: Literal["train", "predict"]) -> None:
         if tab == "train":
             self.command_tabs.setCurrentWidget(self.train_widget)
         elif tab == "predict":
             self.command_tabs.setCurrentWidget(self.predict_widget)
-        elif tab == "label":
-            self.command_tabs.setCurrentWidget(self.label_widget)
         else:
             raise ValueError(f"Unknown DAS tab: {tab!r}")
         self._update_run_button()
@@ -3073,7 +2487,6 @@ class DASConformerWindow(QMainWindow):
         labels = {
             "train": "Start Training",
             "predict": "Start Prediction",
-            "label": "Start Labeling",
         }
         self.run_button.setText(labels[self.active_command_name()])
 
@@ -3081,19 +2494,15 @@ class DASConformerWindow(QMainWindow):
         current = self.command_tabs.currentWidget()
         if current is self.predict_widget:
             return "predict"
-        if current is self.label_widget:
-            return "label"
         return "train"
 
-    def active_widget(self) -> TrainCommandWidget | PredictCommandWidget | LabelCommandWidget:
+    def active_widget(self) -> TrainCommandWidget | PredictCommandWidget:
         return self.command_tabs.currentWidget()
 
-    def _config_for_mode(self, mode: Literal["train", "predict", "label"]) -> Config:
+    def _config_for_mode(self, mode: Literal["train", "predict"]) -> Config:
         try:
             if mode == "predict":
                 return self.predict_widget.build_config()
-            if mode == "label":
-                return self.label_widget.build_config()
             return self.train_widget.build_config()
         except Exception:
             return Config(mode=mode)
@@ -3167,35 +2576,6 @@ class DASConformerWindow(QMainWindow):
             raise ValueError("Annotated region end must be after its start.")
         return start_seconds, stop_seconds
 
-    def _current_label_annotations(
-        self,
-        *,
-        start_seconds: float,
-        stop_seconds: float | None,
-        time_offset_seconds: float,
-    ) -> pd.DataFrame:
-        if self.current_annotations_provider is None:
-            raise ValueError("No current annotations provider is available.")
-        annotations = self.current_annotations_provider().copy()
-        if annotations.empty:
-            return annotations
-        if not {"name", "start_seconds", "stop_seconds"}.issubset(annotations.columns):
-            raise ValueError("Current annotations must contain name, start_seconds, and stop_seconds columns.")
-        if stop_seconds is None:
-            stop_seconds = float("inf")
-        mask = np.logical_and(
-            annotations["stop_seconds"].astype(float) >= float(start_seconds),
-            annotations["start_seconds"].astype(float) <= float(stop_seconds),
-        )
-        clipped = annotations.loc[mask].copy()
-        if clipped.empty:
-            return clipped
-        clipped["start_seconds"] = np.maximum(clipped["start_seconds"].astype(float), float(start_seconds))
-        clipped["stop_seconds"] = np.minimum(clipped["stop_seconds"].astype(float), float(stop_seconds))
-        clipped["start_seconds"] = clipped["start_seconds"] - float(time_offset_seconds)
-        clipped["stop_seconds"] = clipped["stop_seconds"] - float(time_offset_seconds)
-        return clipped
-
     def _predict_config_after_training(self, train_config: Config, *, data_dir: str, output_dir: str) -> Config:
         return train_config.copy(
             mode="predict",
@@ -3265,10 +2645,8 @@ class DASConformerWindow(QMainWindow):
         if not isinstance(payload, dict):
             raise ValueError(f"Expected '{path}' to contain a YAML mapping.")
         mode = payload.get("mode")
-        if mode in {"train", "predict", "label"}:
+        if mode in {"train", "predict"}:
             return str(mode)
-        if any(str(key).startswith("label_") for key in payload):
-            return "label"
         if payload.get("checkpoint"):
             return "predict"
         return self.active_command_name()
@@ -3279,12 +2657,9 @@ class DASConformerWindow(QMainWindow):
             if command_name == "train":
                 self.command_tabs.setCurrentWidget(self.train_widget)
                 self.train_widget.load_state(load_train_gui_state_from_yaml(path))
-            elif command_name == "predict":
+            else:
                 self.command_tabs.setCurrentWidget(self.predict_widget)
                 self.predict_widget.load_state(load_predict_gui_state_from_yaml(path))
-            else:
-                self.command_tabs.setCurrentWidget(self.label_widget)
-                self.label_widget.load_config(Config.from_config_sources([path], mode="label"))
         except Exception as exc:
             raise ValueError(str(exc)) from exc
         self._append_log_line(f"Loaded config from {path}")
@@ -3293,9 +2668,6 @@ class DASConformerWindow(QMainWindow):
         if config.mode == "predict":
             self.command_tabs.setCurrentWidget(self.predict_widget)
             self.predict_widget.load_state(predict_config_to_gui_state(config))
-        elif config.mode == "label":
-            self.command_tabs.setCurrentWidget(self.label_widget)
-            self.label_widget.load_config(config)
         else:
             self.command_tabs.setCurrentWidget(self.train_widget)
             self.train_widget.load_state(train_config_to_gui_state(config))
@@ -3351,14 +2723,10 @@ class DASConformerWindow(QMainWindow):
                 config = self.train_widget.build_config()
                 save_train_config(config, path)
                 yaml_text = format_train_config_yaml(config)
-            elif self.active_command_name() == "predict":
+            else:
                 config = self.predict_widget.build_config()
                 save_predict_config(config, path)
                 yaml_text = format_predict_config_yaml(config)
-            else:
-                config = self.label_widget.build_config()
-                save_config(config, path)
-                yaml_text = format_config_yaml(config)
         except Exception:
             self._show_error("Save Config Failed", traceback.format_exc())
             return
@@ -3368,7 +2736,6 @@ class DASConformerWindow(QMainWindow):
     def run_active_command(self) -> None:
         audio = None
         samplerate = None
-        annotations = None
         time_offset_seconds = 0.0
         predict_after_train = None
         try:
@@ -3379,17 +2746,6 @@ class DASConformerWindow(QMainWindow):
                     raise ValueError("No current audio provider is available.")
                 start_seconds, stop_seconds = self.predict_widget.current_audio_request()
                 audio, samplerate, time_offset_seconds = self.current_audio_provider(start_seconds, stop_seconds)
-            elif command_name == "label" and self.label_widget.uses_current_audio():
-                if self.current_audio_provider is None:
-                    raise ValueError("No current audio provider is available.")
-                start_seconds, stop_seconds = self.label_widget.current_audio_request()
-                audio, samplerate, time_offset_seconds = self.current_audio_provider(start_seconds, stop_seconds)
-                if config.label_items == "segments":
-                    annotations = self._current_label_annotations(
-                        start_seconds=start_seconds,
-                        stop_seconds=stop_seconds,
-                        time_offset_seconds=time_offset_seconds,
-                    )
             elif command_name == "train":
                 predict_after_train = self._build_predict_after_train_request(config)
         except Exception:
@@ -3409,7 +2765,6 @@ class DASConformerWindow(QMainWindow):
             config,
             audio=audio,
             samplerate=samplerate,
-            annotations=annotations,
             time_offset_seconds=time_offset_seconds,
             predict_after_train=predict_after_train,
             stop_event=self._stop_event,
@@ -3444,15 +2799,9 @@ class DASConformerWindow(QMainWindow):
                         prediction_after_train["result"],
                         float(prediction_after_train.get("time_offset_seconds", 0.0)),
                     )
-            elif payload["command"] == "predict":
+            else:
                 self._append_log_line("Prediction stopped early." if payload.get("cancelled") else "Prediction finished.")
                 self._handle_prediction_outputs(
-                    payload["result"],
-                    float(payload.get("time_offset_seconds", 0.0)),
-                )
-            else:
-                self._append_log_line("Labeling finished.")
-                self._handle_label_outputs(
                     payload["result"],
                     float(payload.get("time_offset_seconds", 0.0)),
                 )
@@ -3474,30 +2823,6 @@ class DASConformerWindow(QMainWindow):
                     callback_failed = True
             if not callback_failed:
                 self._append_log_line(f"Returned {len(outputs)} predictions.")
-        else:
-            for output_path in outputs:
-                self._append_log_line(str(output_path))
-
-    def _handle_label_outputs(self, result, time_offset_seconds: float) -> None:
-        if isinstance(result, labeling.LabelingResult):
-            self.label_widget.display_result(result)
-            outputs = result.annotations
-        else:
-            outputs = result
-        if isinstance(outputs, pd.DataFrame):
-            callback_failed = False
-            if self.on_labels is not None:
-                try:
-                    self.on_labels(outputs, time_offset_seconds)
-                except Exception:
-                    error = traceback.format_exc()
-                    self._append_log_line(error)
-                    self._show_error("Label Callback Failed", error)
-                    callback_failed = True
-            if not callback_failed:
-                self._append_log_line(f"Returned {len(outputs)} labels.")
-        elif isinstance(outputs, list) and outputs and all(isinstance(item, pd.DataFrame) for item in outputs):
-            self._append_log_line(f"Returned labels for {len(outputs)} audio files.")
         else:
             for output_path in outputs:
                 self._append_log_line(str(output_path))

@@ -800,6 +800,12 @@ def test_config_rejects_whisperseg_decoder_without_whisperseg_encoder():
         Config(decoder_type="whisperseg").validate()
 
 
+@pytest.mark.parametrize("field, value", [("encoder_type", "aves2"), ("decoder_type", "timestamp")])
+def test_config_rejects_removed_model_options(field: str, value: str):
+    with pytest.raises(ValueError, match=f"Unsupported {field}"):
+        Config(**{field: value}).validate()
+
+
 def test_config_rejects_whisperseg_frontend_without_whisperseg_encoder():
     with pytest.raises(ValueError, match="frontend_type=whisperseg"):
         Config(frontend_type="whisperseg").validate()

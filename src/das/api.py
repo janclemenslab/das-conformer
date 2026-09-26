@@ -29,10 +29,8 @@ from .data import (
     resolve_training_data_dir,
 )
 from .data.audio_dir import (
-    _collect_annotations_for_audio,
     _compute_chunk_starts,
     _normalize_chunk,
-    _read_annotation_tables,
     _resample_audio_array,
     _resolve_chunk_stride,
 )
@@ -41,7 +39,6 @@ from .das_legacy import is_legacy_model_source, legacy_to_das_model, load_legacy
 from .models import DASModel
 from .models.frontends import frontend_hop_seconds, normalize_frontend_config
 from .models.encoders import model_hop_seconds
-from . import labeling
 from . import prediction_results
 from .prediction_results import (
     PredictionEvaluation,
@@ -60,8 +57,6 @@ class PredictRuntime:
     chunk_stride: int | None
     class_names: list[str]
     class_types: list[str] | None
-    decoder_type: str = "linear"
-    max_length: int = 100
     batch_size: int | None = None
     fill_gap_ms: float | None = None
     min_syllable_ms: float | None = None
@@ -956,8 +951,6 @@ def _build_train_datamodule(
         legacy_directory, data_dir = materialize_legacy_store(data_dir)
 
     if is_npy_dir(data_dir):
-        if config.decoder_type == "timestamp":
-            raise ValueError("decoder_type=timestamp requires audio-directory CSV/JSON annotations and cannot use npy_dir.")
         attrs = load_npy_dir_attrs(data_dir)
         samplerate = float(attrs["samplerate_x_Hz"])
         datamodule = NPYDirDataModule(
@@ -988,8 +981,6 @@ def _build_train_datamodule(
         min_annotation_duration_s=float(config.min_annotation_duration_ms) / 1000.0,
         ignore_class_names=bool(config.ignore_class_names),
         include_labels=config.include_labels,
-        target_mode="timestamp" if config.decoder_type == "timestamp" else "dense",
-        max_length=int(config.max_length),
         num_workers=num_workers,
         persistent_workers=num_workers > 0,
         target_samplerate=samplerate if config.target_samplerate_hz is not None else None,
@@ -1268,8 +1259,6 @@ def _build_inference_datamodule(*, data_dir: str, config: Config, runtime: Predi
         chunk_stride=runtime.chunk_stride,
         hop_s=float(runtime.hop_seconds),
         class_names=list(runtime.class_names),
-        target_mode="timestamp" if runtime.decoder_type == "timestamp" else "dense",
-        max_length=int(runtime.max_length),
         val_ratio=float(config.validation_fraction),
         test_ratio=float(config.test_fraction),
         split_within_files=bool(config.split_within_files),
@@ -1371,162 +1360,6 @@ def evaluate(config: ConfigLike = None, *, verbose: bool = False, **overrides) -
     if verbose:
         prediction_results.print_evaluation_report(report)
     return report.summary
-
-
-def label(
-    config: ConfigLike = None,
-    *,
-    audio: RawAudioLike | None = None,
-    samplerate: int | None = None,
-    annotations: pd.DataFrame | list[pd.DataFrame] | None = None,
-    verbose: bool = False,
-    return_details: bool = False,
-    **overrides,
-) -> list[str] | pd.DataFrame | list[pd.DataFrame] | labeling.LabelingResult:
-    config = _api_config(config, mode="label", overrides=overrides)
-    if audio is not None:
-        result = _label_raw_audio(
-            config=config,
-            audio=audio,
-            samplerate=samplerate,
-            annotations=annotations,
-            verbose=verbose,
-        )
-        return result if return_details else result.annotations
-
-    entries, single_input = _label_entries_for_config(config)
-    result = labeling.run_labeling(entries, config)
-    if verbose:
-        _print_label_summary(result)
-    if config.output_dir:
-        written_files = labeling.write_label_outputs(
-            result,
-            output_dir=Path(config.output_dir),
-            output_suffix=str(config.output_suffix),
-            merge=bool(config.merge),
-        )
-        if verbose:
-            print(f"Wrote {len(written_files)} annotation file(s).")
-        return result if return_details else written_files
-    return result if return_details else _label_annotation_return(result, single_input=single_input)
-
-
-def _label_raw_audio(
-    *,
-    config: Config,
-    audio,
-    samplerate: int | None,
-    annotations: pd.DataFrame | list[pd.DataFrame] | None,
-    verbose: bool,
-) -> labeling.LabelingResult:
-    if samplerate is None:
-        raise ValueError("samplerate is required when labeling raw audio.")
-    audio_arrays, single_input = _raw_audio_inputs(audio)
-    annotation_tables = _label_annotation_inputs(annotations, len(audio_arrays))
-    entries = [
-        labeling.LabelAudioEntry(
-            audio=_normalize_raw_audio_array(audio_array),
-            samplerate=int(samplerate),
-            annotations=annotation_table,
-        )
-        for audio_array, annotation_table in zip(audio_arrays, annotation_tables, strict=True)
-    ]
-    result = labeling.run_labeling(entries, config)
-    if verbose:
-        _print_label_summary(result)
-    if single_input and isinstance(result.annotations, list):
-        result.annotations = result.annotations[0]
-    return result
-
-
-def _label_annotation_inputs(
-    annotations: pd.DataFrame | list[pd.DataFrame] | None,
-    count: int,
-) -> list[pd.DataFrame | None]:
-    if annotations is None:
-        return [None] * count
-    if isinstance(annotations, pd.DataFrame):
-        if count != 1:
-            raise ValueError("A single annotations DataFrame can only be used with one raw audio input.")
-        return [annotations]
-    if len(annotations) != count:
-        raise ValueError("Number of annotations tables must match number of raw audio inputs.")
-    return [annotation.copy() for annotation in annotations]
-
-
-def _label_entries_for_config(config: Config) -> tuple[list[labeling.LabelAudioEntry], bool]:
-    data_path = Path(config.data_dir).expanduser()
-    if not data_path.exists():
-        raise ValueError(f"data_dir '{config.data_dir}' is neither a file nor a directory.")
-    audio_paths = []
-    for path in iter_audio_candidate_paths(data_path):
-        try:
-            audio_file_info(
-                path,
-                audio_dataset=config.audio_dataset,
-                data_samplerate_hz=config.data_samplerate_hz,
-            )
-        except Exception:
-            continue
-        audio_paths.append(path)
-    if not audio_paths:
-        raise ValueError(f"No readable audio files found in data_dir '{config.data_dir}'.")
-
-    annotation_tables = _label_annotation_tables(data_path)
-    entries = []
-    for audio_path in audio_paths:
-        annotation_result = _collect_annotations_for_audio(audio_path, annotation_tables)
-        annotations = None if annotation_result is None else annotation_result[1]
-        audio_array, samplerate = load_audio_array(
-            audio_path,
-            audio_dataset=config.audio_dataset,
-            data_samplerate_hz=config.data_samplerate_hz,
-        )
-        entries.append(
-            labeling.LabelAudioEntry(
-                audio=audio_array,
-                samplerate=samplerate,
-                filepath=Path(audio_path),
-                annotations=annotations,
-            )
-        )
-    return entries, _is_single_audio_source(data_path)
-
-
-def _label_annotation_tables(data_path: Path) -> dict[Path, pd.DataFrame]:
-    if data_path.is_file() or data_path.suffix.lower() == ".zarr":
-        annotation_files = [
-            candidate
-            for candidate in (
-                data_path.parent / f"{data_path.stem}_annotations.csv",
-                data_path.parent / f"{data_path.stem}_annotations.CSV",
-                data_path.with_suffix(".csv"),
-                data_path.with_suffix(".CSV"),
-                data_path.with_suffix(".json"),
-                data_path.with_suffix(".JSON"),
-            )
-            if candidate.exists()
-        ]
-    else:
-        annotation_files = sorted(path for path in data_path.rglob("*") if path.suffix.lower() in {".csv", ".json"})
-    return _read_annotation_tables(annotation_files)
-
-
-def _is_single_audio_source(data_path: Path) -> bool:
-    return data_path.is_file() or data_path.suffix.lower() == ".zarr"
-
-
-def _label_annotation_return(result: labeling.LabelingResult, *, single_input: bool) -> pd.DataFrame | list[pd.DataFrame]:
-    if single_input and isinstance(result.annotations, list):
-        return result.annotations[0]
-    return result.annotations
-
-
-def _print_label_summary(result: labeling.LabelingResult) -> None:
-    annotations = result.annotations if isinstance(result.annotations, list) else [result.annotations]
-    annotation_count = sum(len(frame) for frame in annotations)
-    cluster_count = len({int(label) for label in result.cluster_labels if int(label) >= 0})
-    print(f"Labeling produced {annotation_count} annotations from {len(result.items)} items in {cluster_count} cluster(s).")
 
 
 def predict(
@@ -1825,7 +1658,6 @@ def _prediction_result_context(config: Config, runtime: PredictRuntime) -> Predi
         segment_threshold_high=threshold("segment_threshold_high"),
         event_threshold=threshold("event_threshold"),
         legacy_data_padding=int(runtime.legacy_data_padding),
-        decoder_type=str(runtime.decoder_type),
     )
 
 
@@ -1850,9 +1682,6 @@ def _load_predict_model(source: str, *, config: Config) -> tuple[object, Predict
     model = DASModel.load_from_checkpoint(source)
     model_hparams = getattr(model, "hparams", {})
     frontend_config = normalize_frontend_config(model_hparams["frontend"])
-    decoder_config = model_hparams.get("decoder", {})
-    decoder_type = str(decoder_config.get("type", "linear")) if isinstance(decoder_config, Mapping) else "linear"
-    decoder_max_length = int(decoder_config.get("max_length", 100)) if isinstance(decoder_config, Mapping) else 100
     chunk_stride = predict_metadata.get("chunk_stride", model_hparams.get("chunk_stride", config.chunk_stride))
     if chunk_stride is not None:
         chunk_stride = int(chunk_stride)
@@ -1863,8 +1692,6 @@ def _load_predict_model(source: str, *, config: Config) -> tuple[object, Predict
         chunk_stride=chunk_stride,
         class_names=_checkpoint_class_names(model),
         class_types=model_hparams.get("class_types"),
-        decoder_type=decoder_type,
-        max_length=decoder_max_length,
         batch_size=None if predict_metadata.get("batch_size") is None else int(predict_metadata["batch_size"]),
         fill_gap_ms=None if predict_metadata.get("fill_gap_ms") is None else float(predict_metadata["fill_gap_ms"]),
         min_syllable_ms=(

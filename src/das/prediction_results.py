@@ -31,7 +31,6 @@ class PredictionResultContext:
     segment_threshold_high: float = 0.5
     event_threshold: float = 0.5
     legacy_data_padding: int = 0
-    decoder_type: str = "linear"
 
     def __post_init__(self) -> None:
         self.class_names = [str(name) for name in self.class_names]
@@ -49,7 +48,6 @@ class PredictionResultContext:
         self.segment_threshold_high = float(self.segment_threshold_high)
         self.event_threshold = float(self.event_threshold)
         self.legacy_data_padding = int(self.legacy_data_padding)
-        self.decoder_type = str(self.decoder_type)
 
 @dataclass
 class PredictionEvaluation:
@@ -76,12 +74,6 @@ def evaluate_file_predictions(
     chunk_probabilities: list[np.ndarray] | None = None,
     context: PredictionResultContext,
 ) -> PredictionEvaluation:
-    if context.decoder_type == "timestamp":
-        return _evaluate_timestamp_file_predictions(
-            dataset=dataset,
-            predictions=predictions,
-            context=context,
-        )
     if chunk_probabilities is None:
         chunk_probabilities = _prediction_batches_to_chunk_probabilities(predictions)
     dense_matrix, dense_report, syllable_matrix, syllable_report, syllable_wer, summary = (
@@ -120,19 +112,6 @@ def evaluate_supervised_predictions(
     device,
     context: PredictionResultContext,
 ) -> PredictionEvaluation:
-    if context.decoder_type == "timestamp":
-        predictions = []
-        if hasattr(model, "to"):
-            model = model.to(device)
-        if hasattr(model, "eval"):
-            model.eval()
-        with torch.inference_mode():
-            for batch_index, batch in enumerate(dataloader):
-                inputs = torch.as_tensor(batch[0], device=device)
-                input_lengths = torch.as_tensor(batch[1], device=device, dtype=torch.long)
-                triples, triple_lengths = model.predict_step((inputs, input_lengths), batch_index)
-                predictions.append((triples.detach().cpu(), triple_lengths.detach().cpu()))
-        return evaluate_file_predictions(dataset=dataloader.dataset, predictions=predictions, context=context)
 
     dense_matrix, dense_report = _classification_summary(
         model=model,
@@ -203,12 +182,6 @@ def prediction_output_path(audio_file, *, output_dir: Path | None, output_suffix
 
 
 def prediction_annotations(*, dataset, predictions, context: PredictionResultContext) -> list[pd.DataFrame]:
-    if context.decoder_type == "timestamp":
-        return _timestamp_annotations_by_file(
-            dataset=dataset,
-            chunk_triples=_prediction_batches_to_chunk_triples(predictions),
-            class_names=context.class_names,
-        )
     chunk_probabilities = _prediction_batches_to_chunk_probabilities(predictions)
     annotations = [
         _probabilities_to_syllable_annotations(
@@ -551,147 +524,6 @@ def syllable_classification_summary_from_syllable_pairs(
     )
     wer = 0.0 if total_reference_tokens == 0 and total_edits == 0 else float(total_edits) / float(total_reference_tokens or 1)
     return matrix, report, wer
-
-
-def _prediction_batches_to_chunk_triples(predictions) -> list[np.ndarray]:
-    chunk_triples = []
-    for batch_triples, batch_lengths in predictions:
-        triples = torch.as_tensor(batch_triples).detach().cpu().numpy()
-        lengths = torch.as_tensor(batch_lengths, dtype=torch.long).detach().cpu().numpy()
-        for sample_triples, sample_length in zip(triples, lengths, strict=True):
-            chunk_triples.append(sample_triples[: int(sample_length)].astype(np.int64, copy=False))
-    return chunk_triples
-
-
-def _timestamp_annotations_by_file(*, dataset, chunk_triples: list[np.ndarray], class_names: list[str]) -> list[pd.DataFrame]:
-    if len(chunk_triples) != len(dataset):
-        raise ValueError(f"Expected {len(dataset)} timestamp chunk predictions, got {len(chunk_triples)}.")
-
-    annotations = []
-    for file_index, _audio_file in enumerate(dataset.audio_files):
-        first_chunk = int(dataset.chunk_borders[file_index])
-        last_chunk = int(dataset.chunk_borders[file_index + 1])
-        samplerate = int(dataset.samplerate_per_file[file_index])
-        hop_samples = max(int(round(samplerate * dataset.hop_s)), 1)
-        file_samples = int(dataset.nb_samples_in_file[file_index])
-        rows = []
-
-        for global_chunk_index in range(first_chunk, last_chunk):
-            local_chunk_index = global_chunk_index - first_chunk
-            chunk_start = int(dataset.chunk_start_samples[global_chunk_index])
-            ownership_stop = (
-                int(dataset.chunk_start_samples[global_chunk_index + 1])
-                if global_chunk_index + 1 < last_chunk
-                else file_samples
-            )
-            for onset_bin, class_index, offset_bin in chunk_triples[global_chunk_index]:
-                class_index = int(class_index)
-                if class_index <= 0 or class_index >= len(class_names):
-                    continue
-                onset_sample = chunk_start + int(onset_bin) * hop_samples
-                owns_onset = (
-                    chunk_start <= onset_sample <= ownership_stop
-                    if local_chunk_index == 0
-                    else chunk_start < onset_sample <= ownership_stop
-                )
-                if not owns_onset or onset_sample > file_samples:
-                    continue
-                offset_sample = min(chunk_start + int(offset_bin) * hop_samples, file_samples)
-                rows.append(
-                    {
-                        "name": str(class_names[class_index]),
-                        "start_seconds": onset_sample / samplerate,
-                        "stop_seconds": offset_sample / samplerate,
-                    }
-                )
-
-        rows.sort(key=lambda row: (row["start_seconds"], row["stop_seconds"], row["name"]))
-        annotations.append(pd.DataFrame(rows, columns=["name", "start_seconds", "stop_seconds"]))
-    return annotations
-
-
-def _evaluate_timestamp_file_predictions(
-    *,
-    dataset,
-    predictions,
-    context: PredictionResultContext,
-) -> PredictionEvaluation:
-    predicted_annotations = prediction_annotations(dataset=dataset, predictions=predictions, context=context)
-    y_true = []
-    y_pred = []
-    syllable_pairs = []
-    evaluated_file_count = 0
-    skipped_file_count = 0
-    annotations_by_audio = getattr(dataset, "annotations_by_audio", {})
-    annotation_files_by_audio = getattr(dataset, "annotation_files_by_audio", {})
-
-    for file_index, (audio_file, predicted) in enumerate(
-        zip(dataset.audio_files, predicted_annotations, strict=True)
-    ):
-        audio_key = Path(audio_file).expanduser().resolve()
-        reference = annotations_by_audio.get(audio_key)
-        if reference is None:
-            reference = annotation_files_by_audio.get(audio_key)
-        if reference is None:
-            reference = Path(audio_file).with_name(f"{Path(audio_file).stem}_annotations.csv")
-        if not isinstance(reference, pd.DataFrame) and not reference.exists():
-            skipped_file_count += 1
-            continue
-
-        samplerate = int(dataset.samplerate_per_file[file_index])
-        hop_samples = max(int(round(samplerate * dataset.hop_s)), 1)
-        frame_count = _sample_count_to_frame_count(int(dataset.nb_samples_in_file[file_index]), hop_samples)
-        y_true.append(
-            _frame_targets_from_annotation(
-                annotation_file=reference,
-                class_names=context.class_names,
-                frame_count=frame_count,
-                frame_rate_hz=context.frame_rate_hz,
-            )
-        )
-        y_pred.append(
-            _frame_targets_from_annotation(
-                annotation_file=predicted,
-                class_names=context.class_names,
-                frame_count=frame_count,
-                frame_rate_hz=context.frame_rate_hz,
-            )
-        )
-        syllable_pairs.append(
-            (
-                load_reference_syllables(annotation_file=reference, class_names=context.class_names),
-                load_reference_syllables(annotation_file=predicted, class_names=context.class_names),
-            )
-        )
-        evaluated_file_count += 1
-
-    if not evaluated_file_count:
-        raise ValueError("Evaluation requires at least one matching '*_annotations.csv' file.")
-    labels = list(range(len(context.class_names)))
-    flat_true = np.concatenate(y_true)
-    flat_pred = np.concatenate(y_pred)
-    dense_matrix = confusion_matrix(flat_true, flat_pred, normalize="true", labels=labels)
-    dense_report = classification_report(
-        flat_true,
-        flat_pred,
-        labels=labels,
-        target_names=context.class_names,
-        zero_division=0,
-    )
-    syllable_matrix, syllable_report, syllable_wer = syllable_classification_summary_from_syllable_pairs(
-        syllable_pairs=syllable_pairs,
-        class_names=context.class_names,
-        tolerance_seconds=context.tolerance_seconds,
-    )
-    return PredictionEvaluation(
-        summary={"evaluated_file_count": evaluated_file_count, "skipped_file_count": skipped_file_count},
-        class_names=context.class_names,
-        dense_matrix=dense_matrix,
-        dense_report=dense_report,
-        syllable_matrix=syllable_matrix,
-        syllable_report=syllable_report,
-        syllable_wer=syllable_wer,
-    )
 
 
 def _prediction_batches_to_chunk_probabilities(predictions) -> list[np.ndarray]:

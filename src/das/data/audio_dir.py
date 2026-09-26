@@ -921,8 +921,6 @@ class AudioDirGenerator(Dataset):
         class_names: Optional[Sequence[str]] = None,
         class_types: Optional[Sequence[str]] = None,
         return_targets: bool = True,
-        target_mode: str = "dense",
-        max_length: int = 100,
         hop_s: float = 0.002,
         min_annotation_duration_s: float = 4e-3,
         target_samplerate: int | None = None,
@@ -936,13 +934,6 @@ class AudioDirGenerator(Dataset):
         self.class_names = [] if class_names is None else list(class_names)
         self.class_types = _normalize_class_types(class_names=self.class_names, class_types=class_types)
         self.return_targets = return_targets
-        self.target_mode = str(target_mode)
-        self.max_length = int(max_length)
-        if self.target_mode not in {"dense", "timestamp"}:
-            raise ValueError(f"Unknown target mode '{self.target_mode}'.")
-        if self.target_mode == "timestamp" and self.max_length < 5:
-            raise ValueError("Timestamp targets require max_length >= 5.")
-        self.max_annotations = (self.max_length - 2) // 3
         self.hop_s = float(hop_s)
         self.min_annotation_duration_s = max(float(min_annotation_duration_s), 0.0)
         self.target_samplerate = None if target_samplerate is None else int(target_samplerate)
@@ -1081,53 +1072,6 @@ class AudioDirGenerator(Dataset):
             labels[:, 0] = 1.0 - np.sum(labels[:, 1:], axis=1)
         return labels, target_length
 
-    def _build_timestamp_targets(self, file_idx: int, start: int, stop: int, samplerate: int, input_length: int):
-        hop_samples = max(int(round(samplerate * self.hop_s)), 1)
-        max_time_index = int(math.ceil(input_length / hop_samples))
-        start_sec = start / samplerate
-        stop_sec = stop / samplerate
-        triples = []
-
-        for row in self.annotations[file_idx].itertuples(index=False):
-            if row.name not in self.class_names:
-                continue
-            class_index = self.class_names.index(row.name)
-            if class_index == 0:
-                continue
-
-            annot_start = float(row.start_seconds)
-            annot_stop = float(row.stop_seconds)
-            is_event = self.class_types[class_index] == "event"
-            if is_event:
-                if not start_sec <= annot_start <= stop_sec:
-                    continue
-            elif annot_stop <= start_sec or annot_start >= stop_sec:
-                continue
-
-            clipped_start = min(max(annot_start, start_sec), stop_sec) - start_sec
-            clipped_stop = min(max(annot_stop, start_sec), stop_sec) - start_sec
-            onset = int(math.floor(clipped_start * samplerate / hop_samples + 0.5))
-            offset = int(math.floor(clipped_stop * samplerate / hop_samples + 0.5))
-            onset = min(max(onset, 0), max_time_index)
-            offset = min(max(offset, 0), max_time_index)
-            if is_event:
-                offset = onset
-            elif offset <= onset:
-                onset = min(onset, max(max_time_index - 1, 0))
-                offset = min(onset + 1, max_time_index)
-            triples.append((onset, class_index, offset))
-
-        triples.sort(key=lambda triple: (triple[0], triple[2], triple[1]))
-        if len(triples) > self.max_annotations:
-            raise ValueError(
-                f"Chunk contains {len(triples)} annotations, but max_length={self.max_length} "
-                f"supports at most {self.max_annotations}. Increase max_length."
-            )
-        targets = np.zeros((self.max_annotations, 3), dtype=np.int64)
-        if triples:
-            targets[: len(triples)] = np.asarray(triples, dtype=np.int64)
-        return targets, len(triples)
-
     def __getitem__(self, idx):
         chunk, file_idx, start, stop, input_length, samplerate = self._read_chunk(idx)
 
@@ -1137,8 +1081,7 @@ class AudioDirGenerator(Dataset):
                 input_length,
             )
 
-        target_builder = self._build_timestamp_targets if self.target_mode == "timestamp" else self._build_labels
-        labels, target_length = target_builder(
+        labels, target_length = self._build_labels(
             file_idx=file_idx,
             start=start,
             stop=stop,
@@ -1165,8 +1108,6 @@ class AudioDirDataModule(L.LightningDataModule):
         chunk_stride: int | None = None,
         hop_s: float = 0.001,
         class_names: Optional[Sequence[str]] = None,
-        target_mode: str = "dense",
-        max_length: int = 100,
         num_workers: Optional[int] = 2,
         persistent_workers: bool = True,
         val_ratio: float = 0.2,
@@ -1187,12 +1128,6 @@ class AudioDirDataModule(L.LightningDataModule):
         self.num_time_steps = int(num_time_steps)
         self.chunk_stride = _resolve_chunk_stride(self.num_time_steps, chunk_stride)
         self.hop_s = float(hop_s)
-        self.target_mode = str(target_mode)
-        self.max_length = int(max_length)
-        if self.target_mode not in {"dense", "timestamp"}:
-            raise ValueError(f"Unknown target mode '{self.target_mode}'.")
-        if self.target_mode == "timestamp" and self.max_length < 5:
-            raise ValueError("Timestamp targets require max_length >= 5.")
         self.num_workers = int(num_workers) if num_workers is not None else 0
         self.persistent_workers = bool(persistent_workers)
         self.data_dir = data_dir
@@ -1328,23 +1263,6 @@ class AudioDirDataModule(L.LightningDataModule):
             else _class_types_from_event_evidence(self.class_names, event_label_evidence)
         )
         self.num_classes = len(self.class_names)
-        if self.target_mode == "timestamp":
-            overlap_samples = self.num_time_steps - self.chunk_stride
-            for audio_file, annotations in zip(self.annotated_audio_files, self.annotations, strict=True):
-                samplerate = int(self.audio_file_info_by_path[Path(audio_file).expanduser().resolve()]["samplerate"])
-                for row in annotations.itertuples(index=False):
-                    if row.name not in self.class_names:
-                        continue
-                    class_index = self.class_names.index(row.name)
-                    if self.class_types[class_index] != "segment":
-                        continue
-                    duration_samples = int(round((float(row.stop_seconds) - float(row.start_seconds)) * samplerate))
-                    if duration_samples > overlap_samples:
-                        raise ValueError(
-                            f"Timestamp decoder segment '{row.name}' lasts {duration_samples} samples, exceeding "
-                            f"the chunk overlap of {overlap_samples}. Increase chunk size or overlap."
-                        )
-
         self.subsets = {}
         if self.annotated_audio_files:
             if self.split_within_files:
@@ -1533,8 +1451,6 @@ class AudioDirDataModule(L.LightningDataModule):
                 class_names=self.class_names,
                 class_types=self.class_types,
                 return_targets=True,
-                target_mode=self.target_mode,
-                max_length=self.max_length,
                 hop_s=self.hop_s,
                 min_annotation_duration_s=self.min_annotation_duration_s,
                 target_samplerate=self.target_samplerate,
