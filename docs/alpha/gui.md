@@ -6,4 +6,4 @@ Use **DAS → Train** to select a WAV folder or an existing DAS training dataset
 
 Use **DAS → Predict** to select a DAS `.ckpt` or a legacy DAS H5/YAML model. The dialog exposes the same detection and postprocessing controls, plus evaluation options. Predictions appear in the current annotation view for review and can be saved as CSV.
 
-Choose **File → Create dataset from ethodrome folder** for the existing exotic-format dataset-generation workflow. **File → Load dataset** opens an existing dataset.
+Choose **File → Open etho folder** to open ethodrome recordings; use **File → Save dataset** to save one in Zarr format. **DAS → Make dataset for training** builds a train/validation/test `.npy` dataset from an annotated audio folder. **File → Load dataset** opens an existing dataset.
