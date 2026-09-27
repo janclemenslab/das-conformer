@@ -7,10 +7,10 @@ DAS 1.0a1 segments and annotates audio with Conformer, TCN, TweetyNet, and Whisp
 ```shell
 conda create -y -n das python=3.12 uv
 conda activate das
-uv pip install -e ".[gui]"
+uv pip install "das[gui]==1.0a1"
 ```
 
-For development, install the test and docs extras too:
+For development from a source checkout, install the test and docs extras too:
 
 ```shell
 uv pip install -e ".[dev,gui,doc]"

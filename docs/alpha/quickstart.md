@@ -1,6 +1,6 @@
 # Install and train
 
-Install DAS with its GUI after the `1.0a1` pre-release and `xarray-behave 0.38.0a1` are published:
+Install the DAS 1.0a1 pre-release with its GUI:
 
 ```shell
 conda create -n das python=3.12 uv
